@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Strands TypeScript agent with Lambda durable steps and live event display
+
+Resources:
+  EventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: runId
+          AttributeType: S
+        - AttributeName: key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: runId
+          KeyType: HASH
+        - AttributeName: key
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DurableAndAgent
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:CheckpointDurableExecution
+                  - lambda:GetDurableExecutionState
+                Resource: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-worker:*"
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*"
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*"
+              - Effect: Allow
+                Action: dynamodb:PutItem
+                Resource: !GetAtt EventsTable.Arn
+
+  Worker:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints: [src/worker.ts]
+        Target: es2022
+        Format: esm
+        OutExtension: [.js=.mjs]
+        Banner:
+          - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-worker"
+      CodeUri: .
+      Handler: worker.handler
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      MemorySize: 512
+      Timeout: 120
+      Role: !GetAtt WorkerRole.Arn
+      AutoPublishAlias: live
+      DurableConfig:
+        ExecutionTimeout: 600
+        RetentionPeriodInDays: 1
+      Environment:
+        Variables:
+          EVENTS_TABLE: !Ref EventsTable
+          BEDROCK_MODEL_ID: amazon.nova-lite-v1:0
+
+Outputs:
+  DurableFunctionArn:
+    Value: !Sub "${Worker.Arn}:live"
+  EventsTableName:
+    Value: !Ref EventsTable

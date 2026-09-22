@@ -1,0 +1,32 @@
+{
+  "name": "strands-lambda-durable-poc",
+  "version": "0.1.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "smoke": "node scripts/smoke.mjs",
+    "build:viewer": "esbuild src/viewer.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/viewer.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "viewer": "node dist/viewer.mjs"
+  },
+  "keywords": ["aws-lambda", "durable-functions", "strands-agents"],
+  "license": "MIT",
+  "description": "Durable Strands TypeScript agent with live output from AWS Lambda",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1138.0",
+    "@aws-sdk/client-lambda": "^3.1138.0",
+    "@aws-sdk/lib-dynamodb": "^3.1138.0",
+    "@aws/durable-execution-sdk-js": "^2.4.0",
+    "@strands-agents/sdk": "^1.18.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "esbuild": "^0.28.2",
+    "node": "^22.23.2",
+    "typescript": "^7.0.2"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  }
+}
