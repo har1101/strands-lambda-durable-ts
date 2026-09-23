@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds and deploys the example chat: library -> backend bundles -> SAM stack -> frontend -> S3 + CloudFront.
+# Builds and deploys the example chat: backend bundles -> SAM stack -> frontend -> S3 + CloudFront.
 # Env: STACK_NAME (default strands-durable-chat), AWS_REGION (default us-east-1), AWS_PROFILE (optional),
 #      COGNITO_DOMAIN_PREFIX and BEDROCK_MODEL_ID (optional stack parameter overrides).
 set -euo pipefail
@@ -10,8 +10,7 @@ export AWS_REGION
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
-echo "==> Building library and backend"
-npm run build -w strands-lambda-durable
+echo "==> Building backend"
 npm run build -w @strands-lambda-durable/example-chat-backend
 
 overrides=()

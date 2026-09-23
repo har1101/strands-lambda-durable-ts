@@ -20,7 +20,7 @@
     "@smithy/protocol-http": "^5.0.0",
     "@smithy/signature-v4": "^5.0.0",
     "@strands-agents/sdk": "^1.18.0",
-    "strands-lambda-durable": "*",
+    "strands-lambda-durable": "https://github.com/har1101/strands-lambda-durable/releases/download/v0.1.0/strands-lambda-durable-0.1.0.tgz",
     "zod": "^4.6.5"
   },
   "devDependencies": {
