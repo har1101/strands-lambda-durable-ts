@@ -8,6 +8,7 @@ This repository contains:
 | --- | --- |
 | [`examples/chat`](examples/chat) | An authenticated chat web app (React + Vite on CloudFront/S3, Cognito). It streams live over AppSync Events, keeps conversation history in DynamoDB, and shows approve/reject buttons for refunds. The backend uses the library from its [v0.1.1 release](https://github.com/har1101/strands-lambda-durable/releases/tag/v0.1.1). |
 | [`docs/research`](docs/research) | The research notes that motivated the design (Japanese). |
+| [`docs/HANDOFF.md`](docs/HANDOFF.md), [`docs/LEARNINGS.md`](docs/LEARNINGS.md) | Current status and handoff notes, and lessons learned from the implementation (Japanese). |
 
 The library lives in its own repository: [har1101/strands-lambda-durable](https://github.com/har1101/strands-lambda-durable) (English and Japanese README, API reference, tests). It makes each model call and each tool use a durable step, runs parallel tools with a deterministic journal, and turns Strands interrupts into durable callbacks (human-in-the-loop). It also records MCP tool lists, offloads large checkpoints to S3, and restores `appState` and `modelState` on replay.
 
