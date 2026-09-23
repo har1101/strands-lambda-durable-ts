@@ -1,11 +1,12 @@
 /**
  * Checkpoint codec. Version 2 keeps binary content (images, documents, redacted reasoning) intact by
  * storing `Uint8Array` values as base64. Version 1 records contain no binary markers, so both decode.
+ * Version 3 tool records store per-tool `appStateDelta` changes instead of a whole `appState` snapshot.
  */
 
 const BYTES = "$bytes";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** JSON-safe deep copy; `Uint8Array` values become `{ "$bytes": base64 }`. */
 export function encode<T>(value: T): T {
@@ -29,7 +30,7 @@ export function decode<T>(value: T): T {
 }
 
 export function checked<T extends { schemaVersion: number }>(value: T): T {
-  if (value.schemaVersion !== 1 && value.schemaVersion !== 2) {
+  if (value.schemaVersion !== 1 && value.schemaVersion !== 2 && value.schemaVersion !== 3) {
     throw new Error(`Unsupported checkpoint schema: ${value.schemaVersion}`);
   }
   return value;

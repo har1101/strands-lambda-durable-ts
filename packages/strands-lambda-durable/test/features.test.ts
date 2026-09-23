@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpClient, Tool, tool, type ToolContext, type ToolStreamGenerator } from "@strands-agents/sdk";
 import { z } from "zod";
-import { createOffloadSerdes, DurableTool, durableMcpTools, type OffloadStore } from "../src/index.js";
+import { createOffloadSerdes, DurableTool, durableMcpTools, type EventSink, type OffloadStore } from "../src/index.js";
 import { harness, parentNames } from "./helpers.js";
 
 /** Delays the start of a wrapped tool, so tool uses claim their durable slots out of `toolUse` order. */
@@ -21,6 +21,26 @@ class LateStartTool extends Tool {
   async *stream(toolContext: ToolContext): ToolStreamGenerator {
     await this.started;
     return yield* this.inner.stream(toolContext);
+  }
+}
+
+/** Resolves only when the wrapped durable tool has applied its step result to appState. */
+class CompletionTool extends Tool {
+  readonly name: string;
+  readonly description: string;
+  readonly toolSpec: Tool["toolSpec"];
+  constructor(private readonly inner: Tool, private readonly completed: () => void) {
+    super();
+    this.name = inner.name;
+    this.description = inner.description;
+    this.toolSpec = inner.toolSpec;
+  }
+  async *stream(toolContext: ToolContext): ToolStreamGenerator {
+    try {
+      return yield* this.inner.stream(toolContext);
+    } finally {
+      this.completed();
+    }
   }
 }
 
@@ -64,6 +84,56 @@ test("parallel tool uses keep a toolUse-ordered journal when they start and fini
     ["tooluse-1", JSON.stringify([{ json: { id: "A", via: "lookup" } }])],
     ["tooluse-2", JSON.stringify([{ json: { id: "B", via: "lookup_fast" } }])],
   ]);
+});
+
+test("parallel tool uses retain only their own appState writes, live and on replay", async () => {
+  const { promise: secondCaptured, resolve: captureSecond } = Promise.withResolvers<void>();
+  const { promise: firstCompleted, resolve: completeFirst } = Promise.withResolvers<void>();
+  let liveState: ToolContext["agent"]["appState"] | undefined;
+  const runs: string[] = [];
+  const { counter, runner } = await harness({
+    realTime: true,
+    pauseAfterModelCall: 2,
+    executor: "durable",
+    script: { toolUses: [{ name: "first", input: {} }, { name: "second", input: {} }] },
+    onInvocation: invocation => {
+      if (invocation === 2) assert.deepEqual(liveState!.getAll(), { first: "first", second: "second" },
+        "the late completion of the second tool must not replace the first tool's write");
+    },
+    tools: ({ context, sink }) => {
+      const secondEvents: EventSink = {
+        async put(event) {
+          await sink.put(event);
+          if (event.kind === "tool" && event.tool === "second" && event.status === "success") {
+            captureSecond(); // The second tool's old snapshot has already been taken.
+            await firstCompleted;
+          }
+        },
+      };
+      const makeTool = (name: string) => tool({
+        name,
+        description: `Write ${name}.`,
+        inputSchema: z.object({}),
+        callback: async (_, toolContext) => {
+          if (name === "first") await secondCaptured;
+          liveState ??= toolContext!.agent.appState;
+          toolContext!.agent.appState.set(name, name);
+          runs.push(name);
+          return { name };
+        },
+      });
+      return [
+        new CompletionTool(new DurableTool(makeTool("first"), context, { events: sink }), completeFirst),
+        new DurableTool(makeTool("second"), context, { events: secondEvents }),
+      ];
+    },
+  });
+  const execution = await runner.run({ payload: {} });
+
+  assert.equal(execution.getStatus(), "SUCCEEDED");
+  assert.equal(counter.invocations, 2);
+  assert.deepEqual(runs, ["second", "first"], "neither tool reruns on replay");
+  assert.deepEqual(execution.getResult()!.appState, { first: "first", second: "second" });
 });
 
 test("an MCP tool list is recorded once; later invocations of the same execution keep it", async () => {

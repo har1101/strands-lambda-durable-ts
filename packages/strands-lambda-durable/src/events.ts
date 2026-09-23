@@ -15,8 +15,9 @@ export type DurableLiveEvent =
     };
 
 /**
- * Destination for live events (WebSocket push, pub/sub, a table, ...). A throwing sink fails the step it runs in
- * and causes a retry, so advisory sinks should catch their own errors.
+ * Destination for live events (WebSocket push, pub/sub, a table, ...). A throwing sink fails its durable step;
+ * whether it retries depends on that step's retry strategy (the default tool strategy does not retry ordinary
+ * sink errors). Advisory sinks should catch their own errors.
  */
 export interface EventSink {
   put(event: DurableLiveEvent): Promise<void>;

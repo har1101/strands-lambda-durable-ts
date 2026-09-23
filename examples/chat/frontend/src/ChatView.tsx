@@ -15,6 +15,7 @@ import { isBusy, type LiveEvent, type PendingApproval, type ToolStatus } from ".
 const SAMPLE_PROMPTS = ["A-1001 と B-2002 の注文状況をまとめて調べて", "注文 A-1001 に 3000 円を返金して", "123 と 456 を足して"];
 const MAX_TEXT = 4000;
 const POLL_MS = 3000;
+const MAX_APPROVAL_POLL_MS = 30_000;
 
 type LiveItem = { type: "text"; call: number } | { type: "tool"; toolUseId: string };
 
@@ -126,14 +127,25 @@ export function ChatView({ api, events, sub, conversationId, onChanged }: Props)
   const status = data?.conversation.status;
   const busy = isBusy(status);
 
-  // Fallback when live events do not arrive (socket down, missed events): poll while the run is active.
+  // Poll quickly during a run, but back off while waiting for a person to approve.
   useEffect(() => {
     if (!busy) return;
-    const timer = setInterval(() => {
-      if (Date.now() - lastEventAt.current >= POLL_MS) void load();
-    }, POLL_MS);
-    return () => clearInterval(timer);
-  }, [busy, load]);
+    const waitingApproval = status === "waiting_approval";
+    let delay = POLL_MS;
+    let stopped = false;
+    let timer: number;
+    const poll = async () => {
+      if (Date.now() - lastEventAt.current >= POLL_MS) await load();
+      if (stopped) return;
+      if (waitingApproval) delay = Math.min(delay * 2, MAX_APPROVAL_POLL_MS);
+      timer = window.setTimeout(poll, delay);
+    };
+    timer = window.setTimeout(poll, delay);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [busy, status, data?.conversation.activeRunId, load]);
 
   const markRunning = (runId: string | undefined) => {
     loadGeneration.current += 1;

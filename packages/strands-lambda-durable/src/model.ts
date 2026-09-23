@@ -9,7 +9,7 @@ import type { EventSink } from "./events.js";
 import { modelRetryStrategy, type RetryStrategy } from "./retry.js";
 
 type ModelRecord = {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   events: ModelStreamEvent[];
   /** `options.modelState` after the call, for stateful providers (for example a server-side conversation ID). */
   modelState?: Record<string, JSONValue>;

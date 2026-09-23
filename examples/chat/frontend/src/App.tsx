@@ -4,7 +4,7 @@ import { createApi } from "./api";
 import { ChatView } from "./ChatView";
 import { EventsClient, type ConnectionState } from "./events";
 import { Sidebar } from "./Sidebar";
-import { isBusy, type AppConfig, type ConversationSummary } from "./types";
+import type { AppConfig, ConversationSummary } from "./types";
 
 export function App({ config }: { config: AppConfig }) {
   const auth = useAuth();
@@ -76,13 +76,26 @@ function ChatApp({ config }: { config: AppConfig }) {
     void refreshList();
   }, [refreshList]);
 
-  // Keep sidebar badges fresh while any conversation is still working.
-  const anyBusy = conversations?.some(c => isBusy(c.status)) ?? false;
+  // Keep sidebar badges fresh; approval waits need fewer requests than active runs.
+  const anyRunning = conversations?.some(c => c.status === "running") ?? false;
+  const anyWaitingApproval = conversations?.some(c => c.status === "waiting_approval") ?? false;
   useEffect(() => {
-    if (!anyBusy) return;
-    const timer = setInterval(() => void refreshList(), 5000);
-    return () => clearInterval(timer);
-  }, [anyBusy, refreshList]);
+    if (!anyRunning && !anyWaitingApproval) return;
+    let delay = 5000;
+    let stopped = false;
+    let timer: number;
+    const poll = async () => {
+      await refreshList();
+      if (stopped) return;
+      if (!anyRunning) delay = Math.min(delay * 2, 30_000);
+      timer = window.setTimeout(poll, delay);
+    };
+    timer = window.setTimeout(poll, delay);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [anyRunning, anyWaitingApproval, refreshList]);
 
   useEffect(() => {
     const onPop = () => setSelectedId(conversationFromHash());

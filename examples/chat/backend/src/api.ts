@@ -114,7 +114,7 @@ async function getDetail(userId: string, conversationId: string) {
       console.warn(JSON.stringify({ message: "Durable execution check failed", conversationId, error: String(error) }));
     }
   }
-  return { conversation: detail(conversation), messages: await loadMessages(conversationId) };
+  return { conversation: detail(conversation), messages: await loadMessages(conversationId, conversation.messageCount) };
 }
 
 async function postMessage(userId: string, conversationId: string, body: Record<string, unknown>): Promise<{ runId: string }> {

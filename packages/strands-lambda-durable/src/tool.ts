@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { StepError, type DurableContext, type Serdes } from "@aws/durable-execution-sdk-js";
 import {
   TextBlock, Tool, ToolResultBlock,
@@ -11,13 +12,14 @@ import { coordinators, toolScope } from "./scope.js";
 type InterruptRecord = { name: string; reason?: JSONValue };
 
 type ToolRecord = {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   result?: { toolResult: ToolResultBlockData };
   error?: { name: string; message: string };
   /** The tool raised a Strands interrupt; replay raises the same interrupt again. */
   interrupt?: InterruptRecord;
-  /** `agent.appState` after the tool ran, present only when the tool changed it. */
+  /** Legacy v1/v2 whole-state snapshot. New records use per-tool changes instead. */
   appState?: Record<string, JSONValue>;
+  appStateDelta?: { set: Record<string, JSONValue>; delete: string[] };
   /** The step failed permanently (retries exhausted, or a non-retryable exception escaped the tool). */
   failure?: { name: string; message: string };
 };
@@ -33,6 +35,53 @@ export type DurableToolOptions = {
 
 /** Contexts with a sequential DurableTool step in flight. Operation IDs follow call order, so steps must not overlap. */
 const toolInFlight = new WeakSet<DurableContext>();
+type AppState = ToolContext["agent"]["appState"];
+type AppStateChanges = { set: Record<string, JSONValue>; delete: Set<string> };
+const appStateWrites = new AsyncLocalStorage<{ state: AppState; changes: AppStateChanges }>();
+const watchedStates = new WeakSet<AppState>();
+
+/**
+ * StateStore deep-copies on set/get and exposes no mutation hook. Instrument this agent's store once;
+ * async-local attribution keeps overlapping tool uses from recording each other's writes.
+ */
+function watchAppState(state: AppState): void {
+  if (watchedStates.has(state)) return;
+  watchedStates.add(state);
+  const set = state.set.bind(state);
+  const remove = state.delete.bind(state);
+  const clear = state.clear.bind(state);
+  state.set = ((key: string, value: unknown) => {
+    set(key, value);
+    const changes = appStateWrites.getStore();
+    if (changes?.state === state) {
+      changes.changes.set[key] = state.get(key)!;
+      changes.changes.delete.delete(key);
+    }
+  }) as typeof state.set;
+  state.delete = ((key: string) => {
+    remove(key);
+    const changes = appStateWrites.getStore();
+    if (changes?.state === state) {
+      delete changes.changes.set[key];
+      changes.changes.delete.add(key);
+    }
+  }) as typeof state.delete;
+  state.clear = () => {
+    const changes = appStateWrites.getStore();
+    const keys = changes?.state === state ? state.keys() : undefined;
+    clear();
+    if (keys && changes) {
+      for (const key of keys) {
+        delete changes.changes.set[key];
+        changes.changes.delete.add(key);
+      }
+      for (const key of Object.keys(changes.changes.set)) {
+        delete changes.changes.set[key];
+        changes.changes.delete.add(key);
+      }
+    }
+  };
+}
 
 function isInterruptError(error: unknown): error is Error & { interrupts: { name: string; reason?: JSONValue }[] } {
   return error instanceof Error && error.name === "InterruptError" && "interrupts" in error && Array.isArray(error.interrupts);
@@ -91,10 +140,20 @@ export class DurableTool extends Tool {
       toolContext.interrupt(record.interrupt);
       throw new Error("Interrupt returned a response while replaying an unanswered interrupt");
     }
-    if (record.appState) {
-      const state = toolContext.agent.appState;
-      state.clear();
-      for (const [key, value] of Object.entries(decode(record.appState))) state.set(key, value);
+    if (record.appState || record.appStateDelta) {
+      // Replayed writes belong to this record, not to an enclosing tool's async-local tracker.
+      appStateWrites.exit(() => {
+        const state = toolContext.agent.appState;
+        if (record.appState) {
+          // Older checkpoints stored a complete snapshot, including deletions.
+          state.clear();
+          for (const [key, value] of Object.entries(decode(record.appState))) state.set(key, value);
+        }
+        if (record.appStateDelta) {
+          for (const key of record.appStateDelta.delete) state.delete(key);
+          for (const [key, value] of Object.entries(decode(record.appStateDelta.set))) state.set(key, value);
+        }
+      });
     }
     const result = ToolResultBlock.fromJSON(decode(record.result!));
     if (record.error) {
@@ -110,21 +169,27 @@ export class DurableTool extends Tool {
     const { events, retryStrategy = toolRetryStrategy, serdes } = this.options;
     const toolUseId = toolContext.toolUse.toolUseId;
     const idempotencyKey = `${context.executionContext.durableExecutionArn}#${toolUseId}`;
+    const state = toolContext.agent.appState;
+    // The SDK owns one shared StateStore per agent; retries share this accumulator so a successful
+    // attempt still checkpoints mutations performed by earlier attempts of the same tool use.
+    const changes: AppStateChanges = { set: Object.create(null), delete: new Set() };
     try {
       return await context.step(name, async (step): Promise<ToolRecord> => {
-        const stateBefore = JSON.stringify(toolContext.agent.appState.getAll());
-        const outcome = await toolScope.run({ idempotencyKey, attempt: step.attempt }, () => this.runSource(toolContext));
+        watchAppState(state);
+        const outcome = await appStateWrites.run({ state, changes },
+          () => toolScope.run({ idempotencyKey, attempt: step.attempt }, () => this.runSource(toolContext)));
         if ("interrupt" in outcome) return { schemaVersion: SCHEMA_VERSION, interrupt: outcome.interrupt };
         const block = outcome.block;
         if (block.error instanceof RetryableToolError) throw block.error;
-        const stateAfter = toolContext.agent.appState.getAll();
         const result = encode(block.toJSON());
         await events?.put({ kind: "tool", tool: this.name, toolUseId, status: block.status, result });
         return {
           schemaVersion: SCHEMA_VERSION,
           result,
           ...(block.error && { error: { name: block.error.name, message: block.error.message } }),
-          ...(JSON.stringify(stateAfter) !== stateBefore && { appState: encode(stateAfter) }),
+          ...((changes.delete.size || Object.keys(changes.set).length) && {
+            appStateDelta: encode({ set: changes.set, delete: [...changes.delete] }),
+          }),
         };
       }, { retryStrategy, ...(serdes && { serdes }) });
     } catch (error) {

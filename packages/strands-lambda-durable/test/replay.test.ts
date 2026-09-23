@@ -1,9 +1,10 @@
+import type { DurableContext } from "@aws/durable-execution-sdk-js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { WaitingOperationStatus } from "@aws/durable-execution-sdk-js-testing";
-import { Agent } from "@strands-agents/sdk";
+import { Agent, StateStore, tool, ToolResultBlock, type ToolContext } from "@strands-agents/sdk";
 import { z } from "zod";
-import { currentToolExecution, DurableModel, durableWorkflowTool, RetryableToolError } from "../src/index.js";
+import { currentToolExecution, DurableModel, DurableTool, durableWorkflowTool, RetryableToolError } from "../src/index.js";
 import { harness, ScriptedModel, REDACTED } from "./helpers.js";
 
 test("a checkpointed model call is replayed, not re-invoked, after suspension", async () => {
@@ -114,6 +115,10 @@ test("appState written by a tool is restored when the tool step is replayed", as
   const { counter, runner } = await harness({
     realTime: true, pauseAfterModelCall: 2,
     add: ({ a, b }, toolContext) => {
+      toolContext!.agent.appState.set("cleared", true);
+      toolContext!.agent.appState.clear();
+      toolContext!.agent.appState.set("discarded", true);
+      toolContext!.agent.appState.delete("discarded");
       toolContext!.agent.appState.set("lastSum", a + b);
       return { sum: a + b };
     },
@@ -124,6 +129,28 @@ test("appState written by a tool is restored when the tool step is replayed", as
   assert.equal(counter.invocations, 2);
   assert.equal(counter.tool, 1);
   assert.deepEqual(execution.getResult()!.appState, { lastSum: 15 }, "the final invocation only replayed the tool");
+});
+
+test("legacy v1/v2 tool appState snapshots still restore their whole state", async () => {
+  const result = new ToolResultBlock({ toolUseId: "old-use", status: "success", content: [] });
+  const source = tool({
+    name: "old_tool",
+    description: "A tool already checkpointed by an earlier version.",
+    inputSchema: z.object({}),
+    callback: () => { throw new Error("a legacy checkpoint must not rerun its tool"); },
+  });
+  for (const schemaVersion of [1, 2]) {
+    const state = new StateStore({ obsolete: true });
+    const context = {
+      executionContext: { durableExecutionArn: "legacy-execution" },
+      step: async () => ({ schemaVersion, result: result.toJSON(), appState: { restored: schemaVersion } }),
+    } as unknown as DurableContext;
+    const toolContext = { toolUse: { toolUseId: "old-use" }, agent: { appState: state } } as unknown as ToolContext;
+    const restored = await new DurableTool(source, context).stream(toolContext).next();
+    assert.ok(restored.done);
+    assert.equal(restored.value.status, "success");
+    assert.deepEqual(state.getAll(), { restored: schemaVersion });
+  }
 });
 
 test("binary model content survives the checkpoint", async () => {
