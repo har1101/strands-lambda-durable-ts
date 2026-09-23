@@ -43,7 +43,7 @@ export default function contextSync(pi: ExtensionAPI): void {
       additionalContext: [
         `[context-sync] This repository has work that is not yet reflected in ${CONTEXT_DIR}/.`,
         `Before finishing, follow ${CONTEXT_DIR}/README.md:`,
-        `1. Create or update ${CONTEXT_DIR}/${today}-handoff.md (current status, progress, open decisions, next steps, handoff notes) and ${CONTEXT_DIR}/${today}-learnings.md (lessons learned in this session). Start from the latest earlier files in ${CONTEXT_DIR}/, keep facts that still hold, and write in Japanese.`,
+        `1. Create or update ${CONTEXT_DIR}/${today}-handoff.md (current status, progress, open decisions, next steps, handoff notes) and ${CONTEXT_DIR}/${today}-learnings.md (lessons learned in this session). Start from the latest earlier handoff and apply the keep/update/drop rules in ${CONTEXT_DIR}/README.md: keep facts that still hold, update changed ones, and drop resolved or superseded items. Never edit earlier dated files. Write in Japanese.`,
         `2. Commit only ${CONTEXT_DIR}/ (git add ${CONTEXT_DIR}; message "docs(context): ${today} handoff and learnings") and push the current branch.`,
         "If there is nothing worth recording (for example, only exploratory commands), reply briefly that no update is needed and finish.",
       ].join("\n"),

@@ -4,7 +4,7 @@ import { Sha256 } from "@aws-crypto/sha256-js";
 import { defaultProvider } from "@aws-sdk/credential-provider-node";
 import { HttpRequest } from "@smithy/protocol-http";
 import { SignatureV4 } from "@smithy/signature-v4";
-import type { DurableLiveEvent, EventSink } from "strands-lambda-durable";
+import type { DurableLiveEvent, EventSink } from "strands-lambda-durable-functions";
 
 /** The event shapes on `/chat/{userId}/{conversationId}`, without `runId`. */
 export type ChatEvent =

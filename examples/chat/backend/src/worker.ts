@@ -11,8 +11,8 @@ import {
 import {
   createOffloadSerdes, currentToolExecution, DurableModel, DurableTool, DurableToolExecutor, invokeDurably,
   type DurableModelOptions,
-} from "strands-lambda-durable";
-import { s3OffloadStore } from "strands-lambda-durable/s3";
+} from "strands-lambda-durable-functions";
+import { s3OffloadStore } from "strands-lambda-durable-functions/s3";
 import { z } from "zod";
 import { AppSyncPublisher, ChatChannel } from "./appsync.js";
 import { completeRun, failRun, loadMessages, setPendingApproval } from "./store.js";
