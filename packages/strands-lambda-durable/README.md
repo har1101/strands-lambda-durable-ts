@@ -73,7 +73,7 @@ The approver answers with `aws lambda send-durable-execution-callback-success --
 
 ## Guarantees and limits
 
-- **What is replayed.** Completed model calls and tool uses are replayed from the journal, not executed again. This includes error results, interrupts, `appState` changes, and `modelState`. Binary content (`Uint8Array`) is kept. Each tool use records only the `appState` keys it set or deleted, so parallel tools do not overwrite each other's changes. Checkpoints are versioned: `schemaVersion` 3, and versions 1 and 2 are still read.
+- **What is replayed.** Completed model calls and tool uses are replayed from the journal, not executed again. This includes error results, interrupts, `appState` changes, and `modelState`. Binary content (`Uint8Array`) is kept. Each tool use records only the `appState` keys it set or deleted, so parallel tools do not overwrite each other's changes. If two parallel tools write the same key, the final value depends on completion order; use distinct keys. Checkpoints are versioned: `schemaVersion` 3, and versions 1 and 2 are still read.
 - **Not exactly-once.** A step can run again if the process stops after its side effect and before its checkpoint. Pass `idempotencyKey` to an API that deduplicates on it.
 - **Determinism is your part.** Build the agent the same way on every invocation. Keep work that is not durable (hooks with I/O, clocks, random values) out of decisions, or move it into a durable tool. Tools that are not wrapped run again on every replay.
 - **Live events are provisional.** They are side effects of a running step. Retried attempts emit new events with a new `attempt`. Use the journal (or your own store written in a step) as the source of truth.
