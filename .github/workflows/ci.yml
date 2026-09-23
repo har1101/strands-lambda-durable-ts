@@ -9,26 +9,6 @@ permissions:
   contents: read
 
 jobs:
-  library:
-    name: Library (Node ${{ matrix.node }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node: [22, 24]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-      - run: npm ci
-      - run: npm run typecheck -w strands-lambda-durable
-      - run: npm test -w strands-lambda-durable
-      - run: npm run build -w strands-lambda-durable
-      - run: npm pack --dry-run -w strands-lambda-durable
-
   example:
     name: Example chat app
     runs-on: ubuntu-latest
@@ -44,7 +24,6 @@ jobs:
         with:
           use-installer: true
       - run: npm ci
-      - run: npm run build -w strands-lambda-durable
       - run: npm run typecheck -w @strands-lambda-durable/example-chat-backend
       - run: npm run build -w @strands-lambda-durable/example-chat-backend
       - run: npm run build -w @strands-lambda-durable/example-chat-frontend

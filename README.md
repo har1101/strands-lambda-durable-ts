@@ -1,14 +1,16 @@
-# strands-lambda-durable
+# strands-lambda-durable example: durable chat app
 
-Durable [Strands Agents](https://strandsagents.com) (TypeScript) on [AWS Lambda durable functions](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html).
+A deployable example for [strands-lambda-durable](https://github.com/har1101/strands-lambda-durable), which runs [Strands Agents](https://strandsagents.com) (TypeScript) on [AWS Lambda durable functions](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html).
 
 This repository contains:
 
 | Path | What |
 | --- | --- |
-| [`packages/strands-lambda-durable`](packages/strands-lambda-durable) | The library, published to npm as `strands-lambda-durable`. It is a Strands extension that makes each model call and each tool use a durable step, adds parallel tools with a deterministic journal, and turns Strands interrupts into durable callbacks (human-in-the-loop). It also records MCP tool lists, offloads large checkpoints to S3, and restores `appState` and `modelState` on replay. |
-| [`examples/chat`](examples/chat) | A deployable example: an authenticated chat web app (React + Vite on CloudFront/S3, Cognito). It streams live over AppSync Events, keeps conversation history in DynamoDB, and shows approve/reject buttons for refunds. |
+| [`examples/chat`](examples/chat) | An authenticated chat web app (React + Vite on CloudFront/S3, Cognito). It streams live over AppSync Events, keeps conversation history in DynamoDB, and shows approve/reject buttons for refunds. The backend uses the library from its [v0.1.1 release](https://github.com/har1101/strands-lambda-durable/releases/tag/v0.1.1). |
 | [`docs/research`](docs/research) | The research notes that motivated the design (Japanese). |
+| [`docs/HANDOFF.md`](docs/HANDOFF.md), [`docs/LEARNINGS.md`](docs/LEARNINGS.md) | Current status and handoff notes, and lessons learned from the implementation (Japanese). |
+
+The library lives in its own repository: [har1101/strands-lambda-durable](https://github.com/har1101/strands-lambda-durable) (English and Japanese README, API reference, tests). It makes each model call and each tool use a durable step, runs parallel tools with a deterministic journal, and turns Strands interrupts into durable callbacks (human-in-the-loop). It also records MCP tool lists, offloads large checkpoints to S3, and restores `appState` and `modelState` on replay.
 
 ## Why
 
@@ -16,20 +18,19 @@ The [AWS AI workflows sample](https://github.com/aws-samples/sample-ai-workflows
 
 ## Positioning
 
-- **A Strands extension, published as its own package.** It follows the [Strands extension guidelines](https://strandsagents.com/docs/contribute/contributing/extensions/): npm name `strands-{name}`, and the SDKs are peer dependencies. It can be listed in the [Strands community catalog](https://strandsagents.com/docs/integrations/get-featured/). The catalog lists building blocks, so the example app stays in `examples/`.
-- **Not a fork of Strands.** It needs no Strands changes. Two small upstream extension points would simplify it: a documented, stable `ToolExecutor` base (today `ConcurrentToolExecutor` is subclassed) and an exported `InterruptError`.
+- **A Strands extension, published as its own package.** The library follows the [Strands extension guidelines](https://strandsagents.com/docs/contribute/contributing/extensions/): npm name `strands-{name}`, and the SDKs are peer dependencies. It can be listed in the [Strands community catalog](https://strandsagents.com/docs/integrations/get-featured/). The catalog lists building blocks, so this example app is kept in a separate repository.
+- **Not a fork of Strands.** It needs no Strands changes. Two small upstream extension points would simplify it. Both have been proposed: exporting `InterruptError` ([strands-agents/harness-sdk#4541](https://github.com/strands-agents/harness-sdk/pull/4541)), and a documented, stable `ToolExecutor` base ([#762](https://github.com/strands-agents/harness-sdk/issues/762)).
 - **A candidate for the AWS Durable Execution integrations page**, next to Pydantic AI ([docs repo](https://github.com/aws/aws-durable-execution-docs)).
 
 ## Develop
 
 ```bash
 npm ci
-npm run build -w strands-lambda-durable
-npm test -w strands-lambda-durable       # LocalDurableTestRunner; no AWS access needed
 npm run typecheck
+npm run build
 ```
 
-CI (`.github/workflows/ci.yml`) runs the library tests on Node 22 and 24. It also builds the example backend and frontend, and lints the SAM template.
+CI (`.github/workflows/ci.yml`) typechecks and builds the example backend and frontend, and lints the SAM template. The library's tests run in [its own repository](https://github.com/har1101/strands-lambda-durable).
 
 ## Deploy the example chat app
 
@@ -77,7 +78,7 @@ On 2026-09-23, the stack was deployed to `us-east-1` with Claude Haiku 4.5:
 
 ## Design coverage
 
-The design and acceptance tests are in [docs/research/durable-functions-ts-research.md](docs/research/durable-functions-ts-research.md) §5 and §7. "local" means covered by `npm test`; "AWS" means also checked against the deployed example.
+The design and acceptance tests are in [docs/research/durable-functions-ts-research.md](docs/research/durable-functions-ts-research.md) §5 and §7. "local" means covered by the library's `npm test`; "AWS" means also checked against the deployed example.
 
 | Acceptance test | Status |
 | --- | --- |
