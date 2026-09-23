@@ -1,0 +1,517 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  strands-lambda-durable example chat: Cognito-authenticated chat UI on CloudFront + S3, an HTTP API, a Strands
+  agent on a Lambda durable function, and live events through AppSync Events.
+
+Parameters:
+  CognitoDomainPrefix:
+    Type: String
+    Default: ""
+    AllowedPattern: "^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)?$"
+    Description: Prefix of the Cognito managed login domain. Empty means strands-durable-<AccountId>.
+  BedrockModelId:
+    Type: String
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    Description: Bedrock model or inference profile ID used by the agent.
+
+Conditions:
+  HasCognitoDomainPrefix: !Not [!Equals [!Ref CognitoDomainPrefix, ""]]
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    Environment:
+      Variables:
+        CONVERSATIONS_TABLE: !Ref ConversationsTable
+        MESSAGES_TABLE: !Ref MessagesTable
+        OFFLOAD_BUCKET: !Ref OffloadBucket
+
+Resources:
+  # ---------------------------------------------------------------------------------------------------------------
+  # Authentication
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${AWS::StackName}-users"
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      UsernameConfiguration:
+        CaseSensitive: false
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 7
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !If [HasCognitoDomainPrefix, !Ref CognitoDomainPrefix, !Sub "strands-durable-${AWS::AccountId}"]
+      ManagedLoginVersion: 1 # classic hosted UI
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub "${AWS::StackName}-web"
+      GenerateSecret: false # public SPA client; the authorization code flow uses PKCE
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      CallbackURLs:
+        - !Sub "https://${Distribution.DomainName}/"
+        - http://localhost:5173/
+      LogoutURLs:
+        - !Sub "https://${Distribution.DomainName}/"
+        - http://localhost:5173/
+      SupportedIdentityProviders: [COGNITO]
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
+      IdTokenValidity: 60
+      AccessTokenValidity: 60
+      RefreshTokenValidity: 7
+      TokenValidityUnits:
+        IdToken: minutes
+        AccessToken: minutes
+        RefreshToken: days
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+
+  # ---------------------------------------------------------------------------------------------------------------
+  # Data
+
+  ConversationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: conversationId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: conversationId
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  MessagesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: conversationId
+          AttributeType: S
+        - AttributeName: seq
+          AttributeType: N
+      KeySchema:
+        - AttributeName: conversationId
+          KeyType: HASH
+        - AttributeName: seq
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # checkpoints/: large durable step results (createOffloadSerdes). They must outlive the durable execution
+  # retention (7 days). messages/: chat message content above the DynamoDB item size; kept until the conversation
+  # is deleted.
+  OffloadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-checkpoints
+            Status: Enabled
+            Prefix: checkpoints/
+            ExpirationInDays: 14
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+
+  # ---------------------------------------------------------------------------------------------------------------
+  # Live events: AppSync Events. Browsers connect and subscribe with their Cognito ID token; only the worker
+  # publishes (IAM). The namespace handler limits each user to channels /chat/<own sub>/...
+
+  EventsApi:
+    Type: AWS::AppSync::Api
+    Properties:
+      Name: !Sub "${AWS::StackName}-events"
+      EventConfig:
+        AuthProviders:
+          - AuthType: AMAZON_COGNITO_USER_POOLS
+            CognitoConfig:
+              UserPoolId: !Ref UserPool
+              AwsRegion: !Ref AWS::Region
+              AppIdClientRegex: !Sub "^${UserPoolClient}$"
+          - AuthType: AWS_IAM
+        ConnectionAuthModes:
+          - AuthType: AMAZON_COGNITO_USER_POOLS
+        DefaultPublishAuthModes:
+          - AuthType: AWS_IAM
+        DefaultSubscribeAuthModes:
+          - AuthType: AMAZON_COGNITO_USER_POOLS
+
+  ChatNamespace:
+    Type: AWS::AppSync::ChannelNamespace
+    Properties:
+      ApiId: !GetAtt EventsApi.ApiId
+      Name: chat
+      PublishAuthModes:
+        - AuthType: AWS_IAM
+      SubscribeAuthModes:
+        - AuthType: AMAZON_COGNITO_USER_POOLS
+      # ctx.info.channel.segments includes the namespace: /chat/<sub>/<conversationId> -> ["chat", "<sub>", "<id>"].
+      CodeHandlers: |
+        import { util } from '@aws-appsync/utils';
+
+        export function onSubscribe(ctx) {
+          const segments = ctx.info.channel.segments;
+          if (segments.length < 2 || segments[1] !== ctx.identity.sub) {
+            util.unauthorized();
+          }
+        }
+
+  # ---------------------------------------------------------------------------------------------------------------
+  # Functions
+
+  Worker:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-worker"
+      Description: Chat agent run (Lambda durable function)
+      CodeUri: dist/worker
+      Handler: index.handler
+      MemorySize: 1024
+      Timeout: 300
+      AutoPublishAlias: live
+      DurableConfig:
+        ExecutionTimeout: 3600 # covers the 30-minute approval wait (worker.ts interruptTimeout) plus agent work
+        RetentionPeriodInDays: 7
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          EVENTS_HTTP_DOMAIN: !GetAtt EventsApi.Dns.Http
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - lambda:CheckpointDurableExecution
+                - lambda:GetDurableExecutionState
+              # The function's own durable executions. Built from the name: GetAtt would be circular.
+              Resource: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-worker:*"
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:InvokeModelWithResponseStream
+              Resource:
+                # US cross-region inference profiles route to foundation models in several US regions.
+                - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+                - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub "${OffloadBucket.Arn}/*"
+            - Effect: Allow
+              Action: appsync:EventPublish
+              Resource: !GetAtt ChatNamespace.ChannelNamespaceArn
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ConversationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MessagesTable
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Chat HTTP API
+      CodeUri: dist/api
+      Handler: index.handler
+      MemorySize: 512
+      Timeout: 15
+      Environment:
+        Variables:
+          WORKER_ALIAS_ARN: !Ref Worker.Alias
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !Ref Worker.Alias
+            - Effect: Allow
+              Action:
+                - lambda:SendDurableExecutionCallbackSuccess
+                - lambda:GetDurableExecution
+              Resource: !Sub "${Worker.Arn}:*"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:DeleteObject
+              Resource: !Sub "${OffloadBucket.Arn}/messages/*"
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ConversationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MessagesTable
+
+  # ---------------------------------------------------------------------------------------------------------------
+  # HTTP API. Plain ApiGatewayV2 resources: with AWS::Serverless::HttpApi the JWT audience (the app client) would be
+  # inlined into the API definition, and UserPoolClient -> Distribution -> HttpApi -> UserPoolClient is a cycle.
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${AWS::StackName}-api"
+      ProtocolType: HTTP
+
+  HttpApiAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref HttpApi
+      Name: cognito
+      AuthorizerType: JWT
+      IdentitySource: [$request.header.Authorization]
+      JwtConfiguration:
+        Issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+        Audience: [!Ref UserPoolClient]
+
+  HttpApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ApiFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  ListConversationsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /api/conversations
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Sub "integrations/${HttpApiIntegration}"
+
+  CreateConversationRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /api/conversations
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Sub "integrations/${HttpApiIntegration}"
+
+  GetConversationRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /api/conversations/{id}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Sub "integrations/${HttpApiIntegration}"
+
+  DeleteConversationRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: DELETE /api/conversations/{id}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Sub "integrations/${HttpApiIntegration}"
+
+  PostMessageRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /api/conversations/{id}/messages
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Sub "integrations/${HttpApiIntegration}"
+
+  ApprovalRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /api/conversations/{id}/approval
+      AuthorizationType: JWT
+      AuthorizerId: !Ref HttpApiAuthorizer
+      Target: !Sub "integrations/${HttpApiIntegration}"
+
+  HttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    DependsOn:
+      - ListConversationsRoute
+      - CreateConversationRoute
+      - GetConversationRoute
+      - DeleteConversationRoute
+      - PostMessageRoute
+      - ApprovalRoute
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 50
+        ThrottlingRateLimit: 20
+
+  ApiFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ApiFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
+
+  # ---------------------------------------------------------------------------------------------------------------
+  # Static site and CDN. /api/* goes to the HTTP API on the same origin; everything else is the SPA in S3.
+
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${SiteBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  SiteOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-${AWS::Region}-site" # CloudFront names are global across regions
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Client-side routes: a path whose last segment has no file extension serves /index.html.
+  SpaRewriteFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub "${AWS::StackName}-${AWS::Region}-spa-rewrite"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Rewrite extensionless paths to /index.html
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var last = request.uri.substring(request.uri.lastIndexOf('/') + 1);
+          if (last.indexOf('.') === -1) {
+            request.uri = '/index.html';
+          }
+          return request;
+        }
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${AWS::StackName} chat"
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: site
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt SiteOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: api
+            DomainName: !Sub "${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
+          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03 # Managed-SecurityHeadersPolicy
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt SpaRewriteFunction.FunctionARN
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed-CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-AllViewerExceptHostHeader
+            ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03 # Managed-SecurityHeadersPolicy
+
+Outputs:
+  SiteBucketName:
+    Value: !Ref SiteBucket
+  DistributionId:
+    Value: !Ref Distribution
+  SiteUrl:
+    Value: !Sub "https://${Distribution.DomainName}/"
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  CognitoDomain:
+    Value: !Sub "https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
+  EventsHttpDomain:
+    Value: !GetAtt EventsApi.Dns.Http
+  EventsRealtimeDomain:
+    Value: !GetAtt EventsApi.Dns.Realtime
+  WorkerAliasArn:
+    Value: !Ref Worker.Alias
+  ConversationsTable:
+    Value: !Ref ConversationsTable
+  MessagesTable:
+    Value: !Ref MessagesTable

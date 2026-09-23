@@ -1,85 +1,99 @@
-# Strands on Lambda Durable Functions (TypeScript PoC)
+# strands-lambda-durable
 
-A Strands TypeScript agent runs inside an AWS Lambda durable function. Each model request and each tool use has its own durable step. Bedrock text deltas are sent to DynamoDB while the model step runs, and a local web viewer presents them over server-sent events (SSE).
+Durable [Strands Agents](https://strandsagents.com) (TypeScript) on [AWS Lambda durable functions](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html).
 
-This repository is an early integration experiment, not a production package. The two research notes in this repository explain the starting point and the streaming tradeoffs: [TypeScript agent research](durable-functions-ts-research.md) and [streaming research](durable-functions-streaming.md).
+This repository contains:
 
-## Why this exists
+| Path | What |
+| --- | --- |
+| [`packages/strands-lambda-durable`](packages/strands-lambda-durable) | The library, published to npm as `strands-lambda-durable`. It is a Strands extension that makes each model call and each tool use a durable step, adds parallel tools with a deterministic journal, and turns Strands interrupts into durable callbacks (human-in-the-loop). It also records MCP tool lists, offloads large checkpoints to S3, and restores `appState` and `modelState` on replay. |
+| [`examples/chat`](examples/chat) | A deployable example: an authenticated chat web app (React + Vite on CloudFront/S3, Cognito). It streams live over AppSync Events, keeps conversation history in DynamoDB, and shows approve/reject buttons for refunds. |
+| [`docs/research`](docs/research) | The research notes that motivated the design (Japanese). |
 
-The [AWS AI workflows sample](https://github.com/aws-samples/sample-ai-workflows-in-aws-lambda-durable-functions) already runs Strands in a durable function, but puts the entire agent invocation in one step. A crash during an invocation can repeat its model and tool work. Its separate TypeScript agent-loop example checkpoints model and tool calls, but does not use the Strands loop. Strands' experimental checkpoints are separate from the Lambda durable journal. This PoC joins Strands' public `Model.stream` and `Tool.stream` extension points to Lambda's step journal.
+## Why
 
-```text
-Local browser → local viewer → Lambda Invoke (async, published alias)
-                              → Strands Agent
-                                 ├─ durable model step → Bedrock ConverseStream
-                                 └─ durable tool step  → add_numbers
-                              → DynamoDB live events → local viewer SSE → browser
-```
+The [AWS AI workflows sample](https://github.com/aws-samples/sample-ai-workflows-in-aws-lambda-durable-functions) runs a whole Strands invocation in one durable step, so a crash repeats all model and tool work. Strands' own checkpoints are separate from the Lambda journal. This package joins Strands' public `Model.stream`, `Tool.stream`, and tool-executor extension points to the durable journal. It does not change the Strands agent loop. Python users have a comparable integration for Pydantic AI ([`pydantic-ai-harness`](https://docs.aws.amazon.com/durable-execution/sdk-reference/integrations/pydantic-ai/)); this package fills that role for Strands TypeScript.
 
-The model step records the completed Strands event sequence. On replay the adapter yields that sequence to the normal Strands loop without calling Bedrock again. Each tool result is likewise serialized and restored. A fresh Agent and fresh adapters are constructed for each Lambda invocation. Live text is a provisional side channel: if an incomplete model step retries, a new `attempt` identifier replaces its previous displayed text.
+## Positioning
 
-## Requirements
+- **A Strands extension, published as its own package.** It follows the [Strands extension guidelines](https://strandsagents.com/docs/contribute/contributing/extensions/): npm name `strands-{name}`, and the SDKs are peer dependencies. It can be listed in the [Strands community catalog](https://strandsagents.com/docs/integrations/get-featured/). The catalog lists building blocks, so the example app stays in `examples/`.
+- **Not a fork of Strands.** It needs no Strands changes. Two small upstream extension points would simplify it: a documented, stable `ToolExecutor` base (today `ConcurrentToolExecutor` is subclassed) and an exported `InterruptError`.
+- **A candidate for the AWS Durable Execution integrations page**, next to Pydantic AI ([docs repo](https://github.com/aws/aws-durable-execution-docs)).
 
-- Node.js 22+, npm, AWS SAM CLI, AWS CLI, and AWS credentials with CloudFormation, Lambda, IAM, DynamoDB, and Bedrock access.
-- A region with Lambda durable functions and access to the selected Bedrock model. The template defaults to `amazon.nova-lite-v1:0` and was tested in `us-east-1`.
-
-## Deploy and run
+## Develop
 
 ```bash
 npm ci
+npm run build -w strands-lambda-durable
+npm test -w strands-lambda-durable       # LocalDurableTestRunner; no AWS access needed
 npm run typecheck
-sam build --template-file template.yaml
-sam deploy --template-file .aws-sam/build/template.yaml \
-  --stack-name strands-lambda-durable-poc --resolve-s3 \
-  --capabilities CAPABILITY_IAM --region us-east-1 \
-  --no-confirm-changeset
 ```
 
-Read `DurableFunctionArn` and `EventsTableName` from the stack outputs, then run:
+CI (`.github/workflows/ci.yml`) runs the library tests on Node 22 and 24. It also builds the example backend and frontend, and lints the SAM template.
+
+## Deploy the example chat app
+
+Requirements: Node.js 22+, AWS CLI, AWS SAM CLI, and credentials that can deploy CloudFormation, IAM, Lambda, DynamoDB, S3, CloudFront, Cognito, AppSync, and API Gateway. You also need Bedrock access to the model; the default is `us.anthropic.claude-haiku-4-5-20251001-v1:0` in `us-east-1`.
 
 ```bash
-npm run build:viewer
-export DURABLE_FUNCTION_ARN='arn:aws:lambda:REGION:ACCOUNT:function:STACK-worker:live'
-export EVENTS_TABLE='STACK-EventsTable-...'
-npm run viewer
+# STACK_NAME defaults to strands-durable-chat. AWS_REGION defaults to us-east-1, but an AWS_REGION already set in your shell wins.
+AWS_PROFILE=<profile> AWS_REGION=us-east-1 examples/chat/scripts/deploy.sh
+# Sign-up is disabled; create a user (Cognito emails a temporary password):
+aws cognito-idp admin-create-user --user-pool-id <UserPoolId output> \
+  --username you@example.com --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true
 ```
 
-Open <http://127.0.0.1:8787>. The viewer binds only to localhost and uses your local AWS credentials. The Lambda function has no public URL. Choose the replay checkbox to make the first model call finish, wait two seconds, and resume in a new Lambda invocation. The browser should display the text as it arrives and show the `add_numbers` tool result.
+Open the `SiteUrl` output and sign in. Some prompts to try:
 
-To check the durable journal, use the `durableExecutionArn` returned by `POST /runs`:
+- 「A-1001 と B-2002 の注文状況をまとめて調べて」 runs two `lookup_order` tool uses in parallel. Each runs in its own child context.
+- 「注文 A-1001 に 3000 円を返金して」 raises an interrupt. The Lambda invocation ends, and the UI shows 承認 and 却下 buttons. Your answer resumes the same tool use in a new invocation.
 
-```bash
-aws lambda get-durable-execution --durable-execution-arn "$DURABLE_EXECUTION_ARN"
-aws lambda get-durable-execution-history --durable-execution-arn "$DURABLE_EXECUTION_ARN" \
-  --query 'Events[].{type:EventType,name:Name}'
+`npm run smoke -w @strands-lambda-durable/example-chat-backend` checks the deployed backend without the UI; the `smoke:approval` and `smoke:parallel` scripts cover the other scenarios. They need `WORKER_ALIAS_ARN`, `CONVERSATIONS_TABLE`, and `MESSAGES_TABLE` from the stack outputs.
+
+Delete everything with `sam delete --stack-name strands-durable-chat`. Empty the site and offload buckets first.
+
+```mermaid
+flowchart LR
+  B[Browser<br/>React SPA] -- OIDC code+PKCE --> C[Cognito]
+  B -- /api/* JWT --> CF[CloudFront] --> A[HTTP API + JWT authorizer] --> API[API Lambda]
+  API -- Invoke async, DurableExecutionName=runId --> W[Worker<br/>durable function]
+  API -- SendDurableExecutionCallbackSuccess --> W
+  W -- model / tool steps --> BR[Bedrock]
+  W -- history, status --> D[(DynamoDB)]
+  W -- large checkpoints --> S3[(S3)]
+  W -- IAM publish --> E[AppSync Events] -- WebSocket, Cognito --> B
 ```
 
-For the replay probe, expect one `model-1` step, one `replay-after-model` wait, two `InvocationCompleted` events, then one `tool-add_numbers-*` step and one `model-2` step. This is direct evidence that the completed first model call was not billed again on resume.
+### Verified deployment
 
-Delete the stack when finished:
+On 2026-09-23, the stack was deployed to `us-east-1` with Claude Haiku 4.5:
 
-```bash
-sam delete --stack-name strands-lambda-durable-poc --region us-east-1
-```
+- **Smoke scripts.** `replay` finished `SUCCEEDED` in 2 invocations, with `model-1` recorded once. `approval` suspended with 1 completed invocation, resumed after the callback, and ran the tool in `tools-1-0` and then `tools-2-0`. `parallel` put two `lookup_order` tool uses in `tools-1-0` and `tools-1-1`.
+- **Web app in headless Chromium.** Tested through Cognito managed login:
+  - Parallel lookups streamed live over AppSync Events.
+  - A second turn in the same conversation used the saved history.
+  - The pending approval and the prompt survived a page reload.
+  - 承認 issued the refund, and 却下 resumed the same tool use with `rejected`.
 
-## Current scope and next work
+## Design coverage
 
-| Area | PoC | Required for a reusable Strands integration |
-| --- | --- | --- |
-| Model replay | One checkpoint per complete model stream | Versioned codec for all providers, binary blocks, stateful model state, and large histories |
-| Tools | One checkpoint per tool use; sequential executor | Explicit business-error versus retryable-error policy, app state reconstruction, idempotency keys for external effects |
-| Streaming | Live text in DynamoDB; local SSE viewer | Batching, durable event cursor, hosted auth, retention policy, and a push channel such as AppSync Events |
-| Agent flow | Standard Strands loop, four-turn cap | MCP discovery, callbacks, subagents, parallel tools, provider-independent tests |
-| Deployment | SAM stack with a published alias | CI, multi-region tests, IAM tightening, version migration and release packaging |
+The design and acceptance tests are in [docs/research/durable-functions-ts-research.md](docs/research/durable-functions-ts-research.md) §5 and §7. "local" means covered by `npm test`; "AWS" means also checked against the deployed example.
 
-AWS steps record completed operations, but cannot guarantee exactly-once execution of an external side effect if the process stops after that effect and before its checkpoint. Real tools need stable idempotency keys. The sample `add_numbers` tool has no external side effect. Each text delta currently causes a DynamoDB write, which keeps the PoC simple but is not suitable for high-volume production traffic. DynamoDB TTL removes events after roughly one day; TTL deletion is asynchronous.
-
-The viewer is meant for one short session. Its SSE connection lasts up to two minutes. It is not a long-running browser session or callback transport. Store durable conversation state separately and use an authenticated push channel for long waits or multiple viewers. The PoC's model event codec uses JSON and is limited to stateless, text/tool-use model events. Model or tool callbacks that change Strands state outside their returned values need additional replay handling.
-
-## Verified deployment
-
-On 2026-09-22, the stack `strands-lambda-durable-poc` was deployed in `us-east-1`. A replay-probe run completed with `SUCCEEDED`, two Lambda invocations, one model step before the wait, one tool step, and a second model step after the wait. A live SSE run delivered its first text about 0.9 seconds after start and completed about 5 seconds after start; `add_numbers` returned `15` for `7 + 8`.
+| Acceptance test | Status |
+| --- | --- |
+| A model step is saved, then the process stops → the model is not called again | Done (local, AWS) |
+| A/B/C, stop after B → work continues from C | Done (local) |
+| Stop after a side effect, before its checkpoint → no duplicate business result | Stable `idempotencyKey`. The external API must deduplicate on it |
+| Human approval suspends → a new invocation continues after the callback | Done (local, AWS) |
+| A transient model or tool error → only that step is retried | Done (local: throttling retried, validation not retried, `RetryableToolError`) |
+| An error result or interrupt → restored without an extra infrastructure retry | Done (local, AWS) |
+| An MCP server's tool list changes → a running execution keeps the recorded list | Done (local) |
+| Another execution in a warm environment → no state is shared | By design: all adapter state is per invocation |
+| A tool updates `appState` → the same state after replay | Done (local) |
+| Parallel tools finish in a different order → the `toolUseId` mapping is unchanged | Done (local, AWS) |
+| A stream stops midway → completed calls are not billed again; the unfinished attempt is replaced | Done for completed calls; the `attempt` ID replaces the partial text |
+| A new version is published while old executions run → they keep their code | By design: executions are pinned to the version behind the `live` alias |
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT
