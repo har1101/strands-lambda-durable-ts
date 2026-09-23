@@ -1,5 +1,5 @@
 // Bundles the Lambda handlers: src/worker.ts -> dist/worker/index.mjs, src/api.ts -> dist/api/index.mjs.
-// Everything is bundled, including the AWS SDK and strands-lambda-durable.
+// Everything is bundled, including the AWS SDK and strands-lambda-durable-functions.
 import { rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

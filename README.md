@@ -1,16 +1,16 @@
-# strands-lambda-durable example: durable chat app
+# strands-lambda-durable-functions example: durable chat app
 
-A deployable example for [strands-lambda-durable](https://github.com/har1101/strands-lambda-durable), which runs [Strands Agents](https://strandsagents.com) (TypeScript) on [AWS Lambda durable functions](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html).
+A deployable example for [strands-lambda-durable-functions](https://github.com/har1101/strands-lambda-durable-functions), an unofficial community extension that runs [Strands Agents](https://strandsagents.com) (TypeScript) on [AWS Lambda durable functions](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html). Neither project is affiliated with the Strands Agents project or AWS.
 
 This repository contains:
 
 | Path | What |
 | --- | --- |
-| [`examples/chat`](examples/chat) | An authenticated chat web app (React + Vite on CloudFront/S3, Cognito). It streams live over AppSync Events, keeps conversation history in DynamoDB, and shows approve/reject buttons for refunds. The backend uses the library from its [v0.1.1 release](https://github.com/har1101/strands-lambda-durable/releases/tag/v0.1.1). |
+| [`examples/chat`](examples/chat) | An authenticated chat web app (React + Vite on CloudFront/S3, Cognito). It streams live over AppSync Events, keeps conversation history in DynamoDB, and shows approve/reject buttons for refunds. The backend uses the library from its [v0.2.0 release](https://github.com/har1101/strands-lambda-durable-functions/releases/tag/v0.2.0). |
 | [`docs/research`](docs/research) | The research notes that motivated the design (Japanese). |
 | [`docs/context`](docs/context) | Dated status, handoff notes, and lessons learned (Japanese). Read the latest files first; see its README for the convention. |
 
-The library lives in its own repository: [har1101/strands-lambda-durable](https://github.com/har1101/strands-lambda-durable) (English and Japanese README, API reference, tests). It makes each model call and each tool use a durable step, runs parallel tools with a deterministic journal, and turns Strands interrupts into durable callbacks (human-in-the-loop). It also records MCP tool lists, offloads large checkpoints to S3, and restores `appState` and `modelState` on replay.
+The library lives in its own repository: [har1101/strands-lambda-durable-functions](https://github.com/har1101/strands-lambda-durable-functions) (English and Japanese README, API reference, tests). It makes each model call and each tool use a durable step, runs parallel tools with a deterministic journal, and turns Strands interrupts into durable callbacks (human-in-the-loop). It also records MCP tool lists, offloads large checkpoints to S3, and restores `appState` and `modelState` on replay.
 
 ## Why
 
@@ -30,7 +30,7 @@ npm run typecheck
 npm run build
 ```
 
-CI (`.github/workflows/ci.yml`) typechecks and builds the example backend and frontend, and lints the SAM template. The library's tests run in [its own repository](https://github.com/har1101/strands-lambda-durable).
+CI (`.github/workflows/ci.yml`) typechecks and builds the example backend and frontend, and lints the SAM template. The library's tests run in [its own repository](https://github.com/har1101/strands-lambda-durable-functions).
 
 ## Deploy the example chat app
 
