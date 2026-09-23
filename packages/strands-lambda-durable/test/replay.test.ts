@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { WaitingOperationStatus } from "@aws/durable-execution-sdk-js-testing";
 import { Agent, StateStore, tool, ToolResultBlock, type ToolContext } from "@strands-agents/sdk";
 import { z } from "zod";
-import { currentToolExecution, DurableModel, DurableTool, durableWorkflowTool, RetryableToolError } from "../src/index.js";
+import { currentToolExecution, DurableModel, DurableTool, durableWorkflowTool, RetryableToolError, type EventSink } from "../src/index.js";
 import { harness, ScriptedModel, REDACTED } from "./helpers.js";
 
 test("a checkpointed model call is replayed, not re-invoked, after suspension", async () => {
@@ -129,6 +129,40 @@ test("appState written by a tool is restored when the tool step is replayed", as
   assert.equal(counter.invocations, 2);
   assert.equal(counter.tool, 1);
   assert.deepEqual(execution.getResult()!.appState, { lastSum: 15 }, "the final invocation only replayed the tool");
+});
+
+test("appState written by a tool whose step fails is undone, matching replay", async () => {
+  let liveState: ToolContext["agent"]["appState"] | undefined;
+  const { counter, runner } = await harness({
+    realTime: true, pauseAfterModelCall: 2,
+    onInvocation: invocation => {
+      if (invocation === 2) assert.deepEqual(liveState!.getAll(), {}, "the failed step's write must not stay live");
+    },
+    tools: ({ context, sink }) => {
+      const failingSink: EventSink = {
+        async put(event) {
+          if (event.kind === "tool") throw new Error("sink down");
+          await sink.put(event);
+        },
+      };
+      const addNumbers = tool({
+        name: "add_numbers",
+        description: "Add two numbers.",
+        inputSchema: z.object({ a: z.number(), b: z.number() }),
+        callback: ({ a, b }, toolContext) => {
+          liveState = toolContext!.agent.appState;
+          liveState.set("partial", a + b);
+          return { sum: a + b };
+        },
+      });
+      return [new DurableTool(addNumbers, context, { events: failingSink })];
+    },
+  });
+  const execution = await runner.run({ payload: {} });
+
+  assert.equal(execution.getStatus(), "SUCCEEDED");
+  assert.equal(counter.invocations, 2);
+  assert.deepEqual(execution.getResult()!.appState, {}, "replay restores no appState for a failed step");
 });
 
 test("legacy v1/v2 tool appState snapshots still restore their whole state", async () => {

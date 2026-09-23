@@ -36,7 +36,12 @@ export type DurableToolOptions = {
 /** Contexts with a sequential DurableTool step in flight. Operation IDs follow call order, so steps must not overlap. */
 const toolInFlight = new WeakSet<DurableContext>();
 type AppState = ToolContext["agent"]["appState"];
-type AppStateChanges = { set: Record<string, JSONValue>; delete: Set<string> };
+type AppStateChanges = {
+  set: Record<string, JSONValue>;
+  delete: Set<string>;
+  /** Value of each key before this tool use first changed it (`undefined`: absent), for rollback. */
+  before: Map<string, JSONValue | undefined>;
+};
 const appStateWrites = new AsyncLocalStorage<{ state: AppState; changes: AppStateChanges }>();
 const watchedStates = new WeakSet<AppState>();
 
@@ -50,37 +55,56 @@ function watchAppState(state: AppState): void {
   const set = state.set.bind(state);
   const remove = state.delete.bind(state);
   const clear = state.clear.bind(state);
+  const tracked = () => {
+    const writes = appStateWrites.getStore();
+    return writes?.state === state ? writes.changes : undefined;
+  };
+  const remember = (changes: AppStateChanges, key: string) => {
+    if (!changes.before.has(key)) changes.before.set(key, state.get(key));
+  };
   state.set = ((key: string, value: unknown) => {
+    const changes = tracked();
+    if (changes) remember(changes, key);
     set(key, value);
-    const changes = appStateWrites.getStore();
-    if (changes?.state === state) {
-      changes.changes.set[key] = state.get(key)!;
-      changes.changes.delete.delete(key);
+    if (changes) {
+      changes.set[key] = state.get(key)!;
+      changes.delete.delete(key);
     }
   }) as typeof state.set;
   state.delete = ((key: string) => {
+    const changes = tracked();
+    if (changes) remember(changes, key);
     remove(key);
-    const changes = appStateWrites.getStore();
-    if (changes?.state === state) {
-      delete changes.changes.set[key];
-      changes.changes.delete.add(key);
+    if (changes) {
+      delete changes.set[key];
+      changes.delete.add(key);
     }
   }) as typeof state.delete;
   state.clear = () => {
-    const changes = appStateWrites.getStore();
-    const keys = changes?.state === state ? state.keys() : undefined;
+    const changes = tracked();
+    const keys = changes ? [...state.keys(), ...Object.keys(changes.set)] : [];
+    if (changes) for (const key of keys) remember(changes, key);
     clear();
-    if (keys && changes) {
+    if (changes) {
       for (const key of keys) {
-        delete changes.changes.set[key];
-        changes.changes.delete.add(key);
-      }
-      for (const key of Object.keys(changes.changes.set)) {
-        delete changes.changes.set[key];
-        changes.changes.delete.add(key);
+        delete changes.set[key];
+        changes.delete.add(key);
       }
     }
   };
+}
+
+/**
+ * Restores the keys a tool use changed. Used when its step records no `appStateDelta` (an interrupt or a
+ * permanent failure), so that live state matches what replay produces.
+ */
+function rollBack(state: AppState, changes: AppStateChanges): void {
+  appStateWrites.exit(() => {
+    for (const [key, value] of changes.before) {
+      if (value === undefined) state.delete(key);
+      else state.set(key, value);
+    }
+  });
 }
 
 function isInterruptError(error: unknown): error is Error & { interrupts: { name: string; reason?: JSONValue }[] } {
@@ -172,13 +196,17 @@ export class DurableTool extends Tool {
     const state = toolContext.agent.appState;
     // The SDK owns one shared StateStore per agent; retries share this accumulator so a successful
     // attempt still checkpoints mutations performed by earlier attempts of the same tool use.
-    const changes: AppStateChanges = { set: Object.create(null), delete: new Set() };
+    const changes: AppStateChanges = { set: Object.create(null), delete: new Set(), before: new Map() };
     try {
       return await context.step(name, async (step): Promise<ToolRecord> => {
         watchAppState(state);
         const outcome = await appStateWrites.run({ state, changes },
           () => toolScope.run({ idempotencyKey, attempt: step.attempt }, () => this.runSource(toolContext)));
-        if ("interrupt" in outcome) return { schemaVersion: SCHEMA_VERSION, interrupt: outcome.interrupt };
+        if ("interrupt" in outcome) {
+          // The tool runs again when the interrupt is answered; until then its writes are not part of the journal.
+          rollBack(state, changes);
+          return { schemaVersion: SCHEMA_VERSION, interrupt: outcome.interrupt };
+        }
         const block = outcome.block;
         if (block.error instanceof RetryableToolError) throw block.error;
         const result = encode(block.toJSON());
@@ -194,8 +222,10 @@ export class DurableTool extends Tool {
       }, { retryStrategy, ...(serdes && { serdes }) });
     } catch (error) {
       // The failure is journaled, so replay reaches this branch again and produces the same record. No live event
-      // here: this line also runs on every replay.
+      // here: this line also runs on every replay. The journal keeps no appState changes for a failed step, so undo
+      // the live ones (on replay nothing was changed).
       if (!(error instanceof StepError)) throw error;
+      rollBack(state, changes);
       return { schemaVersion: SCHEMA_VERSION, failure: { name: error.name, message: error.message } };
     }
   }
