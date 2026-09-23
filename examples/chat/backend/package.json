@@ -1,0 +1,29 @@
+{
+  "name": "@strands-lambda-durable/example-chat-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "smoke": "node scripts/smoke.mjs replay",
+    "smoke:approval": "node scripts/smoke.mjs approval",
+    "smoke:parallel": "node scripts/smoke.mjs parallel"
+  },
+  "dependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
+    "@aws-sdk/client-dynamodb": "^3.1138.0",
+    "@aws-sdk/client-lambda": "^3.1138.0",
+    "@aws-sdk/client-s3": "^3.1138.0",
+    "@aws-sdk/credential-provider-node": "^3.972.84",
+    "@aws-sdk/lib-dynamodb": "^3.1138.0",
+    "@aws/durable-execution-sdk-js": "^2.4.0",
+    "@smithy/protocol-http": "^5.0.0",
+    "@smithy/signature-v4": "^5.0.0",
+    "@strands-agents/sdk": "^1.18.0",
+    "strands-lambda-durable": "*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.150"
+  }
+}
