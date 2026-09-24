@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { WebStorageStateStore } from "oidc-client-ts";
 import { AuthProvider } from "react-oidc-context";
 import { App } from "./App";
-import type { AppConfig } from "./types";
+import { APP_NAMES, type AppConfig } from "./types";
 import "./styles.css";
 
 const root = createRoot(document.getElementById("root")!);
@@ -12,6 +12,7 @@ try {
   const response = await fetch("/config.json", { cache: "no-store" });
   if (!response.ok) throw new Error(`/config.json: HTTP ${response.status}`);
   const config = (await response.json()) as AppConfig;
+  document.title = APP_NAMES[config.engine];
   const origin = window.location.origin;
   root.render(
     <StrictMode>
@@ -35,7 +36,7 @@ try {
   root.render(
     <div className="landing">
       <div className="landing-card">
-        <h1>Durable Strands Chat</h1>
+        <h1>Durable Chat</h1>
         <p className="error-text">設定を読み込めませんでした: {error instanceof Error ? error.message : String(error)}</p>
       </div>
     </div>,

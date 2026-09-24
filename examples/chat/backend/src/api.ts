@@ -8,7 +8,7 @@ import {
   clearPendingApproval, createConversation, deleteConversation, detail, failRun, getConversation, listConversations,
   loadMessages, setExecutionArn, startRun, type ConversationItem,
 } from "./store.js";
-import type { WorkerRequest } from "./worker.js";
+import type { WorkerRequest } from "./worker-common.js";
 
 const lambda = new LambdaClient({});
 const workerAliasArn = process.env.WORKER_ALIAS_ARN!;

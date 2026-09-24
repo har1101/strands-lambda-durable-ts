@@ -6,7 +6,8 @@ This repository contains:
 
 | Path | What |
 | --- | --- |
-| [`examples/chat`](examples/chat) | An authenticated chat web app (React + Vite on CloudFront/S3, Cognito). It streams live over AppSync Events, keeps conversation history in DynamoDB, and shows approve/reject buttons for refunds. The backend uses the library from its [v0.2.0 release](https://github.com/har1101/strands-lambda-durable-functions/releases/tag/v0.2.0). |
+| [`examples/chat`](examples/chat) | An authenticated chat web app (React + Vite on CloudFront/S3, Cognito). It streams live over AppSync Events, keeps conversation history in DynamoDB, and shows approve/reject buttons for refunds. The worker comes in two interchangeable versions that share the API, storage, live events and UI: `src/worker.ts` uses the library from its [v0.2.0 release](https://github.com/har1101/strands-lambda-durable-functions/releases/tag/v0.2.0) with Strands Agents, and `src/worker-minamo.ts` uses [minamo](https://github.com/har1101/minamo) (`@minamojs/minamo` and `@minamojs/lambda-df`) with a hand-written loop over Bedrock ConverseStream. |
+| [`docs/blog`](docs/blog) | A long-form Japanese guide to minamo: design principles, how TypeScript runs on Lambda durable functions, the SDK integration, and performance tuning with measurements from this example. |
 | [`docs/research`](docs/research) | The research notes that motivated the design (Japanese). |
 | [`docs/context`](docs/context) | Dated status, handoff notes, and lessons learned (Japanese). Read the latest files first; see its README for the convention. |
 
@@ -30,28 +31,32 @@ npm run typecheck
 npm run build
 ```
 
-CI (`.github/workflows/ci.yml`) typechecks and builds the example backend and frontend, and lints the SAM template. The library's tests run in [its own repository](https://github.com/har1101/strands-lambda-durable-functions).
+CI (`.github/workflows/ci.yml`) typechecks the example backend, builds it with both workers and the frontend, and lints the SAM template. The library's tests run in [its own repository](https://github.com/har1101/strands-lambda-durable-functions).
 
 ## Deploy the example chat app
 
-Requirements: Node.js 22+, AWS CLI, AWS SAM CLI, and credentials that can deploy CloudFormation, IAM, Lambda, DynamoDB, S3, CloudFront, Cognito, AppSync, and API Gateway. You also need Bedrock access to the model; the default is `us.anthropic.claude-haiku-4-5-20251001-v1:0` in `us-east-1`.
+Requirements: Node.js 22+, AWS CLI v2, and credentials that can deploy CloudFormation, IAM, Lambda, DynamoDB, S3, CloudFront, Cognito, AppSync, and API Gateway. The SAM CLI is not needed: the script packages with `aws cloudformation package` and CloudFormation runs the SAM transform. You also need Bedrock access to the model; the default is `us.anthropic.claude-haiku-4-5-20251001-v1:0` in `us-east-1`.
 
 ```bash
-# STACK_NAME defaults to strands-durable-chat. AWS_REGION defaults to us-east-1, but an AWS_REGION already set in your shell wins.
+# WORKER_ENGINE picks the worker: strands (default, stack strands-durable-chat) or minamo (stack minamo-durable-chat).
+# AWS_REGION defaults to us-east-1, but an AWS_REGION already set in your shell wins.
 AWS_PROFILE=<profile> AWS_REGION=us-east-1 examples/chat/scripts/deploy.sh
+WORKER_ENGINE=minamo AWS_PROFILE=<profile> AWS_REGION=us-east-1 examples/chat/scripts/deploy.sh
 # Sign-up is disabled; create a user (Cognito emails a temporary password):
 aws cognito-idp admin-create-user --user-pool-id <UserPoolId output> \
   --username you@example.com --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true
 ```
 
+The script uploads the code to `durable-chat-artifacts-<account>-<region>` (created if missing; override with `ARTIFACT_BUCKET`). The minamo stack gets the Cognito domain prefix `minamo-durable-<account>` because the template's default is taken by the Strands stack of the same account.
+
 Open the `SiteUrl` output and sign in. Some prompts to try:
 
 - 「A-1001 と B-2002 の注文状況をまとめて調べて」 runs two `lookup_order` tool uses in parallel. Each runs in its own child context.
-- 「注文 A-1001 に 3000 円を返金して」 raises an interrupt. The Lambda invocation ends, and the UI shows 承認 and 却下 buttons. Your answer resumes the same tool use in a new invocation.
+- 「注文 A-1001 に 3000 円を返金して」 suspends on a durable callback. The Lambda invocation ends, and the UI shows 承認 and 却下 buttons. Your answer resumes the same tool use in a new invocation.
 
-`npm run smoke -w @strands-lambda-durable/example-chat-backend` checks the deployed backend without the UI; the `smoke:approval` and `smoke:parallel` scripts cover the other scenarios. They need `WORKER_ALIAS_ARN`, `CONVERSATIONS_TABLE`, and `MESSAGES_TABLE` from the stack outputs.
+`npm run smoke -w @strands-lambda-durable/example-chat-backend` checks the deployed backend without the UI; the `smoke:approval` and `smoke:parallel` scripts cover the other scenarios. They need `WORKER_ALIAS_ARN`, `CONVERSATIONS_TABLE`, and `MESSAGES_TABLE` from the stack outputs, and `WORKER_ENGINE=minamo` for the minamo stack.
 
-Delete everything with `sam delete --stack-name strands-durable-chat`. Empty the site and offload buckets first.
+Delete a stack with `aws cloudformation delete-stack --stack-name <stack>`. Empty its site and offload buckets first.
 
 ```mermaid
 flowchart LR
@@ -67,14 +72,15 @@ flowchart LR
 
 ### Verified deployment
 
-On 2026-09-23, the stack was deployed to `us-east-1` with Claude Haiku 4.5:
+On 2026-09-24, both stacks were deployed to `us-east-1` with Claude Haiku 4.5:
 
-- **Smoke scripts.** `replay` finished `SUCCEEDED` in 2 invocations, with `model-1` recorded once. `approval` suspended with 1 completed invocation, resumed after the callback, and ran the tool in `tools-1-0` and then `tools-2-0`. `parallel` put two `lookup_order` tool uses in `tools-1-0` and `tools-1-1`.
-- **Web app in headless Chromium.** Tested through Cognito managed login:
+- **Smoke scripts, both workers.** `replay` finished `SUCCEEDED` in 2 invocations, with `model-1` recorded once. `approval` suspended with 1 completed invocation and resumed after the callback. `parallel` put two `lookup_order` tool uses in separate child contexts (`tools-1-0`/`tools-1-1` for Strands, `tools-1:<toolUseId>` for minamo).
+- **minamo web app in headless Chromium.** Tested through Cognito managed login:
   - Parallel lookups streamed live over AppSync Events.
-  - A second turn in the same conversation used the saved history.
-  - The pending approval and the prompt survived a page reload.
+  - The pending approval survived a page reload.
   - 承認 issued the refund, and 却下 resumed the same tool use with `rejected`.
+  - A second turn in the same conversation used the saved history.
+- The Strands web app was last tested in the browser on 2026-09-23.
 
 ## Design coverage
 

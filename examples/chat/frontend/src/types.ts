@@ -7,6 +7,18 @@ export type AppConfig = {
   apiBaseUrl: string;
   eventsHttpDomain: string;
   eventsRealtimeDomain: string;
+  /** The agent layer of the worker; the API, events and UI are the same for both. */
+  engine: "strands" | "minamo";
+};
+
+export const APP_NAMES: Record<AppConfig["engine"], string> = {
+  strands: "Durable Strands Chat",
+  minamo: "Durable minamo Chat",
+};
+
+export const APP_DESCRIPTIONS: Record<AppConfig["engine"], string> = {
+  strands: "AWS Lambda durable functions 上で動く Strands Agents のデモです。",
+  minamo: "AWS Lambda durable functions 上で動く、minamo で書いたエージェントのデモです。",
 };
 
 // Contract B: HTTP API.
