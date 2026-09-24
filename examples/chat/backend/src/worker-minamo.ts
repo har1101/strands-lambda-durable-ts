@@ -64,14 +64,10 @@ function stringField(input: unknown, key: string): string {
   return value;
 }
 
-/** minamo's idempotency key is `<executionId>#<tool call id>`; the UI keys tool cards by Bedrock's toolUseId. */
-const toolUseIdOf = (idempotencyKey: string) => idempotencyKey.slice(idempotencyKey.lastIndexOf("#") + 1);
-
 /** The run's tools. Live events are published inside steps, so a replay does not publish them again. */
 function shopTools(channel: ChatChannel, requestApproval: (pending: PendingApproval) => Promise<void>): Record<string, Tool> {
   const plain = (name: string, run: (input: unknown) => unknown): Tool => ({
-    run: async (input, { idempotencyKey }) => {
-      const toolUseId = toolUseIdOf(idempotencyKey);
+    run: async (input, { call: { id: toolUseId } }) => {
       await channel.publish({ kind: "tool", tool: name, toolUseId, status: "progress" });
       try {
         const output = await run(input);
@@ -90,11 +86,10 @@ function shopTools(channel: ChatChannel, requestApproval: (pending: PendingAppro
     lookup_order: plain("lookup_order", input => lookupOrder(stringField(input, "orderId"))),
     // A workflow tool may use durable operations: it suspends on a callback until someone answers.
     issue_refund: {
-      workflow: async (input, { durable, idempotencyKey }) => {
+      workflow: async (input, { durable, idempotencyKey, call: { id: toolUseId } }) => {
         const orderId = stringField(input, "orderId");
         const amount = numberField(input, "amount");
         if (amount <= 0) throw new Error("amount must be positive");
-        const toolUseId = toolUseIdOf(idempotencyKey);
         const reason = { action: "issue_refund", orderId, amount };
         const answer = await durable.signal<{ approved?: unknown } | null>("approval", async callbackId => {
           await requestApproval({ callbackId, interrupt: { id: toolUseId, name: "approval", reason } });
