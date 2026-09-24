@@ -60,3 +60,11 @@
 - **実行の履歴（`get-durable-execution-history`）から、コールバック ID が分かります。** `CallbackStarted` のイベントの `CallbackStartedDetails.CallbackId` です。`waitForCallback` の内部のオペレーションには名前がないので、`SubType`（`Callback`、`Step`）で識別します。
 - **ツールのリトライ待ちの後、次の試行は別の呼び出しで動くようです。** 承認待ちを含む実行で、呼び出しが 3 回になりました。1 回目の実行、リトライ待ちの後、承認後の再開と推測しています（ログでの裏付けはしていません）。
 - **npm の Trusted Publishing は、既にあるパッケージの設定画面で登録します。** そのため、最初の公開は手動（`npm login` と `npm publish`）で行います。2026-09 以降に登録した設定は、既定で `npm stage publish`（staged publishing）だけを許可します。`npm publish` も許可するかは、登録時に選びます。npm CLI 11.5.1 以上と Node 22.14 以上が必要です。
+
+## minamo の scoped package 公開
+
+- npm registry に名前が存在しなくても、公開時の類似名チェックで拒否されることがあります。`minamo` は `minami`、`minio` に似ているとして 403 になりました。org `minamojs` を作成し、`@minamojs/minamo` と `@minamojs/lambda-df` にしました。
+- パッケージ名変更では、ソースの import だけでなく workspace スクリプト、peerDependencies、tsconfig paths、release workflow、README、lockfile も更新します。内部の `packages/core` ディレクトリ名は公開名と一致させる必要はありません。
+- workspace 内だけの検証ではリンクや tsconfig paths に問題が隠れるため、pack した tarball を別ディレクトリにインストールし、公開 import と実動作を確認しました。
+- 今回は最初の npm publish のブラウザ承認後、2 つ目は追加承認なしで成功しました。ただし毎回同じ動作になる保証はありません。
+- publish が成功して org の package 一覧に載っても、直後の public registry GET は 404 でした。バージョン別 endpoint と tarball が先に取得でき、その後 metadata と alpha タグが反映されました。反映後の `npm install ...@alpha` は成功しています。初回 Release workflow も metadata 反映前に公開済み判定が外れて失敗しましたが、反映後の再実行は既公開のバージョンをスキップして成功しました。
