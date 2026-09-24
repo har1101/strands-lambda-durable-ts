@@ -22,3 +22,8 @@ PR [#4541](https://github.com/strands-agents/harness-sdk/pull/4541)（`Interrupt
 - **`LocalDurableTestRunner` は STEP の記録の 256 KB 上限を検査しません。** 上限のテストは、アダプター側の検査で行う必要があります。
 - **`setupTestEnvironment({ skipTime: true })` にすると、リトライの待ち時間がなくなります。** SDK の既定のリトライ（6 回）に戻ってしまう退行を、テストで試行回数として素早く検出できます。
 - **リトライの待ち時間が `NaN` だと、ローカルランナーは `RangeError: Invalid time value` で落ちます。** 実行結果は `getHistoryEvents()` の `StepFailedDetails.RetryDetails.NextAttemptDelaySeconds` で確認できます。既定の jitter は FULL なので、値は毎回変わります。
+
+## npm の Trusted Publishing（minamo `0.1.0-alpha.1`）
+
+- **OIDC による新バージョンの公開は、トークンなしで成功しました。** `release.yml` の `npm publish` が provenance に署名し、sigstore の透明性ログにも記録されました。
+- **公開した直後は、registry にまだ現れません。** ログに「Your package is being processed and may take a few minutes」と出ます。`@minamojs/minamo` は約 2 分、`@minamojs/lambda-df` は約 4 分後に `dist-tags` に反映されました。反映後も、手元の npm キャッシュのせいで `ETARGET` になることがあり、`npm install --prefer-online` で解消しました。
