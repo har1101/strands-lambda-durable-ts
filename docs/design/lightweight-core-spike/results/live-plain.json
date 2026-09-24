@@ -1,0 +1,31 @@
+{
+  "thinking": false,
+  "status": "SUCCEEDED",
+  "result": {
+    "text": "The total of orders A-1001 and A-1002 is **4,600 JPY**.",
+    "stopReason": "end_turn",
+    "usage": {
+      "inputTokens": 2609,
+      "outputTokens": 206
+    },
+    "blocks": [
+      "user:text",
+      "assistant:toolUse,toolUse",
+      "user:toolResult,toolResult",
+      "assistant:text,toolUse",
+      "user:toolResult",
+      "assistant:text"
+    ]
+  },
+  "operations": [
+    "model-1",
+    "tool-1-0",
+    "tool-1-1",
+    "model-2",
+    "tool-2-0",
+    "model-3"
+  ],
+  "providerCalls": 3,
+  "invocations": 1,
+  "liveEvents": "model_start,tool_end,tool_end,model_start,text,text,text,tool_end,model_start,text,text"
+}
