@@ -40,3 +40,12 @@
 - **`LocalDurableTestRunner.teardownTestEnvironment()` は、`setupTestEnvironment()` を呼んでいないと例外を投げます。** Lambda 以外のテストと同じファイルにあると、共通の `afterEach` で失敗します。Lambda のテストの中で `t.after()` を使います。
 - **Web 標準の API だけで書けば、Bun でもそのまま動きます。** `btoa`/`atob`、`crypto.randomUUID`、`Promise.withResolvers` を使い、`Buffer`、`node:crypto`、`AsyncLocalStorage` は使いません。コンテキストは引数で渡します。
 - **npm の短いローマ字の名前は、ほとんど使われています。** `npm view <name>` が E404 を返せば空きです。npmjs.com の org ページは 403 になるため、スコープが空いているかはこの方法では確認できません。
+- **`https://registry.npmjs.org/<name>` を直接読むと、取り下げられた名前も分かります。** その場合は `time.unpublished` に記録があります。例えば `tsubame`、`kohaku`、`raijin` は 2021〜2022 年に取り下げられていました。取り下げから 24 時間が経てば、名前は再利用できるはずです（未検証）。
+- **名前を選ぶときは、npm だけでなく GitHub の星の数も確認します。** `gh search repos <name> --sort stars` で調べます。npm では空いていても、同じ名前の有名なプロジェクトがあると、検索でまず勝てません。例: `shiori` には go-shiori（星 11,651）があり、`kohaku` には同じ名前の AI エージェントのフレームワークがありました。
+
+## minamo のリポジトリ作成
+
+- **Lambda の SDK の `context.step` は、`retryStrategy` を省くと SDK の既定のリトライが動きます。** `memory` エンジンは省くとリトライしないので、エンジンによって振る舞いが変わっていました。`retry` がないときは `() => ({ shouldRetry: false })` を明示して、どちらのエンジンでも 1 回だけ実行するようにしました。
+- **一時的なエラーを判定する正規表現に、`\b5\d\d\b` や `\b429\b` のような数字を入れてはいけません。** 「520 tokens」のような検証エラーの文言に一致して、リトライしてしまいます。`throttl`、`service.?unavailable`、`internal.?server` のような語で判定します。
+- **README のコード例は、`test/` に同じコードの `.ts` を置いて `npm run typecheck` で検査します。** 利用者のコードは `declare` で宣言します。ファイル名を `*.test.ts` にしなければ、テストとしては実行されません。
+- **`gh repo create <owner>/<name> --public --source . --push` を使えば、ローカルのリポジトリから作成と push が 1 回で済みます。** その後、`gh run watch <id> --exit-status` で CI の完了を待てます。
