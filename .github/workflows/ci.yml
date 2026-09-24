@@ -26,5 +26,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck -w @strands-lambda-durable/example-chat-backend
       - run: npm run build -w @strands-lambda-durable/example-chat-backend
+      - run: npm run build -w @strands-lambda-durable/example-chat-backend
+        env:
+          WORKER_ENGINE: minamo
       - run: npm run build -w @strands-lambda-durable/example-chat-frontend
       - run: sam validate --lint --template-file examples/chat/backend/template.yaml --region us-east-1

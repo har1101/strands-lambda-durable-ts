@@ -1,5 +1,6 @@
-// Bundles the Lambda handlers: src/worker.ts -> dist/worker/index.mjs, src/api.ts -> dist/api/index.mjs.
-// Everything is bundled, including the AWS SDK and strands-lambda-durable-functions.
+// Bundles the Lambda handlers: the worker -> dist/worker/index.mjs, src/api.ts -> dist/api/index.mjs.
+// WORKER_ENGINE picks the worker: strands (default, src/worker.ts) or minamo (src/worker-minamo.ts).
+// Everything is bundled, including the AWS SDK and the agent libraries.
 import { rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,10 @@ import { build } from "esbuild";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 await rm(join(root, "dist"), { recursive: true, force: true });
+
+const WORKERS = { strands: "worker.ts", minamo: "worker-minamo.ts" };
+const engine = process.env.WORKER_ENGINE || "strands";
+if (!Object.hasOwn(WORKERS, engine)) throw new Error(`Unknown WORKER_ENGINE: ${engine} (strands | minamo)`);
 
 const common = {
   bundle: true,
@@ -19,8 +24,8 @@ const common = {
   logLevel: "info",
 };
 
-await Promise.all(["worker", "api"].map(name => build({
+await Promise.all([["worker", WORKERS[engine]], ["api", "api.ts"]].map(([name, entry]) => build({
   ...common,
-  entryPoints: [join(root, "src", `${name}.ts`)],
+  entryPoints: [join(root, "src", entry)],
   outfile: join(root, "dist", name, "index.mjs"),
 })));

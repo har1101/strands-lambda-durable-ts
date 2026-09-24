@@ -4,7 +4,7 @@ import { createApi } from "./api";
 import { ChatView } from "./ChatView";
 import { EventsClient, type ConnectionState } from "./events";
 import { Sidebar } from "./Sidebar";
-import type { AppConfig, ConversationSummary } from "./types";
+import { APP_DESCRIPTIONS, APP_NAMES, type AppConfig, type ConversationSummary } from "./types";
 
 export function App({ config }: { config: AppConfig }) {
   const auth = useAuth();
@@ -19,9 +19,9 @@ export function App({ config }: { config: AppConfig }) {
     return (
       <div className="landing">
         <div className="landing-card">
-          <h1>Durable Strands Chat</h1>
+          <h1>{APP_NAMES[config.engine]}</h1>
           <p>
-            AWS Lambda durable functions 上で動く Strands Agents のデモです。途中で中断しても再開でき、返金などの操作は人の承認を待ちます。
+            {APP_DESCRIPTIONS[config.engine]}途中で中断しても再開でき、返金などの操作は人の承認を待ちます。
           </p>
           {auth.error && <p className="error-text">ログインに失敗しました: {auth.error.message}</p>}
           <button className="button primary large" onClick={() => void auth.signinRedirect()}>
@@ -147,7 +147,7 @@ function ChatApp({ config }: { config: AppConfig }) {
         <button className="icon-button menu-button" aria-label="会話一覧" onClick={() => setSidebarOpen(open => !open)}>
           <span className="menu-icon" />
         </button>
-        <div className="brand">Durable Strands Chat</div>
+        <div className="brand">{APP_NAMES[config.engine]}</div>
         <div className={`connection connection-${connection}`} title={CONNECTION_LABELS[connection]}>
           <span className="connection-dot" />
           <span className="connection-label">{CONNECTION_LABELS[connection]}</span>

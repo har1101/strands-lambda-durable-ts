@@ -1,6 +1,7 @@
 // Worker smoke test against a deployed stack, bypassing the HTTP API.
 // Usage: node scripts/smoke.mjs <replay|approval|parallel>
-//   Env: WORKER_ALIAS_ARN, CONVERSATIONS_TABLE, MESSAGES_TABLE (stack outputs), AWS_REGION / AWS_PROFILE.
+//   Env: WORKER_ALIAS_ARN, CONVERSATIONS_TABLE, MESSAGES_TABLE (stack outputs), AWS_REGION / AWS_PROFILE,
+//        WORKER_ENGINE (strands | minamo; default strands) - the worker the stack was built with.
 //   replay   - the first model call's step completes, the execution waits 2 s, and the rest runs in a second
 //              invocation that replays model-1 from its checkpoint.
 //   approval - issue_refund raises an interrupt; the execution suspends on a durable callback, this script approves,
@@ -23,6 +24,8 @@ const PROMPTS = {
 
 const scenario = process.argv[2] ?? "replay";
 if (!(scenario in PROMPTS)) throw new Error(`Unknown scenario: ${scenario} (replay | approval | parallel)`);
+const engine = process.env.WORKER_ENGINE || "strands";
+if (engine !== "strands" && engine !== "minamo") throw new Error(`Unknown WORKER_ENGINE: ${engine} (strands | minamo)`);
 const { WORKER_ALIAS_ARN: workerAliasArn, CONVERSATIONS_TABLE: conversationsTable, MESSAGES_TABLE: messagesTable } = process.env;
 if (!workerAliasArn || !conversationsTable || !messagesTable) {
   throw new Error("Set WORKER_ALIAS_ARN, CONVERSATIONS_TABLE and MESSAGES_TABLE");
@@ -120,7 +123,7 @@ try {
   // Message content is stored as JSON text; a tool result may nest the tool's JSON output as escaped text.
   const savedText = saved.map(m => m.content ?? "").join("\n");
   const summary = {
-    scenario, runId, durableExecutionArn: arn, status: execution?.Status, conversationStatus: conversation.status,
+    engine, scenario, runId, durableExecutionArn: arn, status: execution?.Status, conversationStatus: conversation.status,
     lastError: conversation.lastError, totalMs: Date.now() - start, invocations, steps: stepNames,
     contexts: [...contextName.values()], savedMessages: saved.length, title: conversation.title,
   };
@@ -134,17 +137,29 @@ try {
     if (waits !== 1) failures.push(`replay-after-model waits: ${waits}`);
     if (invocations !== 2) failures.push(`invocations: ${invocations} (expected 2)`);
   } else if (scenario === "approval") {
-    const refundSteps = stepNames.filter(name => name?.startsWith("tool-issue_refund-"));
-    if (refundSteps.length !== 2) failures.push(`issue_refund steps: ${refundSteps.length} (interrupted + resumed)`);
+    if (engine === "strands") {
+      const refundSteps = stepNames.filter(name => name?.startsWith("tool-issue_refund-"));
+      if (refundSteps.length !== 2) failures.push(`issue_refund steps: ${refundSteps.length} (interrupted + resumed)`);
+    } else {
+      // minamo: the workflow tool's scope holds one callback and, after the answer, the "complete" step.
+      const callbacks = events.filter(e => e.EventType === "CallbackStarted");
+      const completes = steps.filter(e => e.Name === "complete" && /^tools-\d+:/.test(contextName.get(e.ParentId) ?? ""));
+      if (callbacks.length !== 1) failures.push(`callbacks: ${callbacks.length} (expected 1)`);
+      if (completes.length !== 1) failures.push(`issue_refund complete steps: ${completes.length} (expected 1)`);
+    }
     if (invocations < 2) failures.push("the callback must resume in a new invocation");
     if (!/\\*"status\\*":\\*"issued/.test(savedText)) failures.push("saved messages do not contain an issued refund");
     summary.approval = approval;
   } else {
-    const lookups = steps.filter(e => e.Name?.startsWith("tool-lookup_order-"));
+    // strands: tool-lookup_order-* steps in tools-1-<n> contexts. minamo: "run" steps in tools-1:<toolUseId> scopes.
+    const lookups = engine === "strands"
+      ? steps.filter(e => e.Name?.startsWith("tool-lookup_order-"))
+      : steps.filter(e => e.Name === "run" && /^tools-1:/.test(contextName.get(e.ParentId) ?? ""));
     const parents = lookups.map(e => contextName.get(e.ParentId));
+    const parentPattern = engine === "strands" ? /^tools-1-\d+$/ : /^tools-1:\S+$/;
     if (lookups.length < 2) failures.push(`lookup_order steps: ${lookups.length}`);
-    if (!parents.every(name => /^tools-1-\d+$/.test(name ?? "")) || new Set(parents).size !== parents.length) {
-      failures.push(`lookup_order steps must run in distinct tools-1-* child contexts: ${JSON.stringify(parents)}`);
+    if (!parents.every(name => parentPattern.test(name ?? "")) || new Set(parents).size !== parents.length) {
+      failures.push(`lookup_order steps must run in distinct tools-1 child contexts: ${JSON.stringify(parents)}`);
     }
     summary.lookupContexts = parents;
   }

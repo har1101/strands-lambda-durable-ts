@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >-
-  strands-lambda-durable-functions example chat: Cognito-authenticated chat UI on CloudFront + S3, an HTTP API, a Strands
-  agent on a Lambda durable function, and live events through AppSync Events.
+  Durable chat example: Cognito-authenticated chat UI on CloudFront + S3, an HTTP API, an agent on a Lambda durable
+  function (strands-lambda-durable-functions or minamo, chosen at build time), and live events through AppSync Events.
 
 Parameters:
   CognitoDomainPrefix:
