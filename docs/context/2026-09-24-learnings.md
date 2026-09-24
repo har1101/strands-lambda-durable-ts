@@ -68,3 +68,5 @@
 - workspace 内だけの検証ではリンクや tsconfig paths に問題が隠れるため、pack した tarball を別ディレクトリにインストールし、公開 import と実動作を確認しました。
 - 今回は最初の npm publish のブラウザ承認後、2 つ目は追加承認なしで成功しました。ただし毎回同じ動作になる保証はありません。
 - publish が成功して org の package 一覧に載っても、直後の public registry GET は 404 でした。バージョン別 endpoint と tarball が先に取得でき、その後 metadata と alpha タグが反映されました。反映後の `npm install ...@alpha` は成功しています。初回 Release workflow も metadata 反映前に公開済み判定が外れて失敗しましたが、反映後の再実行は既公開のバージョンをスキップして成功しました。
+- npm の Publishing access で 2FA を必須にし、bypass 2FA トークンを禁止しても、Trusted Publisher の OIDC 公開は利用できます。直接公開する現行 workflow では、Trusted Publisher の Allowed actions で `npm publish` を許可します。
+- Trusted Publisher の Environment name は GitHub Actions の Environment 名に対応します。現行 workflow は Environment を指定していないため、npm 側も空欄にします。Label は任意の表示名で、認証条件ではありません。
