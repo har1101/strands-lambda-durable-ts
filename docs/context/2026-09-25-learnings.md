@@ -27,3 +27,7 @@ PR [#4541](https://github.com/strands-agents/harness-sdk/pull/4541)（`Interrupt
 
 - **OIDC による新バージョンの公開は、トークンなしで成功しました。** `release.yml` の `npm publish` が provenance に署名し、sigstore の透明性ログにも記録されました。
 - **公開した直後は、registry にまだ現れません。** ログに「Your package is being processed and may take a few minutes」と出ます。`@minamojs/minamo` は約 2 分、`@minamojs/lambda-df` は約 4 分後に `dist-tags` に反映されました。反映後も、手元の npm キャッシュのせいで `ETARGET` になることがあり、`npm install --prefer-online` で解消しました。
+
+## チャット例の minamo 0.1.0-alpha.1 への切り替え
+
+- **ツールのライブイベントと承認 ID には `ctx.call.id` をそのまま使えます。** 従来の `idempotencyKey` の末尾を `#` で区切る方法は、呼び出し ID 自体に `#` が含まれると欠けます。実際の `shopTools` をローカルでバンドルして両経路を動かし、`#` を含む ID が進捗・結果イベントと承認イベントで保持されることを確認しました。返金の冪等性キーは従来どおり `ctx.idempotencyKey` を使います。
