@@ -70,3 +70,18 @@
 - publish が成功して org の package 一覧に載っても、直後の public registry GET は 404 でした。バージョン別 endpoint と tarball が先に取得でき、その後 metadata と alpha タグが反映されました。反映後の `npm install ...@alpha` は成功しています。初回 Release workflow も metadata 反映前に公開済み判定が外れて失敗しましたが、反映後の再実行は既公開のバージョンをスキップして成功しました。
 - npm の Publishing access で 2FA を必須にし、bypass 2FA トークンを禁止しても、Trusted Publisher の OIDC 公開は利用できます。直接公開する現行 workflow では、Trusted Publisher の Allowed actions で `npm publish` を許可します。
 - Trusted Publisher の Environment name は GitHub Actions の Environment 名に対応します。現行 workflow は Environment を指定していないため、npm 側も空欄にします。Label は任意の表示名で、認証条件ではありません。
+
+## チャット例の minamo 版とブログ用の計測
+
+- **ワーカーだけを差し替える構成にすると、API、保存形式、ライブイベント、画面をそのまま共有できます。** Strands の `DurableLiveEvent` と同じ形のイベント（`model_start`、`text`、`tool`）を minamo 版でも出せば、フロントエンドは変更不要でした。ライブイベントは step の中で送ると、リプレイで二重に送られません。
+- **SAM テンプレートのデプロイは、既存の SAM CLI で作ったスタックでも `aws cloudformation package`/`deploy` に切り替えられます。** `strands-durable-chat` をこの方法で更新し、smoke 3 種が通りました。
+- **Cognito のドメインプレフィックスはリージョン内でグローバルに一意です。** テンプレートの既定値 `strands-durable-<account>` は同じアカウントの 2 つ目のスタックでは使えないので、minamo 版は `minamo-durable-<account>` を渡します。
+- **オペレーション ID は `md5(<カウンター>)` の先頭 16 文字でした。** 実行履歴の最初の step の ID `c4ca4238a0b92382` は `md5("1")` と一致し、`c81e728d…` は `md5("2")` です。子コンテキストの中は `3-1` のように親の ID を前に付けます。名前は ID に使われず、リプレイ時の不一致検出にだけ使われます。
+- **`waitForCallback` は履歴上、名前付きの子コンテキスト（`SubType: WaitForCallback`）の中に名前なしの `Callback` と submitter の `Step` として現れます。** smoke の検査では、名前ではなく `SubType` と親コンテキストで判定します。
+- **durable function のログは JSON 形式です。** `platform.report` の `record.metrics.initDurationMs` がコールドスタートのときだけ入ります。CloudWatch Logs の filter pattern は `{ $.record.metrics.initDurationMs > 0 }` です。
+- **すぐ失敗する非同期呼び出しを同時に 10 件送っても、ウォームの実行環境が 1 つあると全部そこで処理され、コールドスタートを測れませんでした。** 公平に測るには、同じバンドルで普通の Lambda 関数を作り、呼び出しの前に毎回環境変数を書き換えて新しい実行環境を作らせます（`update-function-configuration` → `wait function-updated-v2` → `invoke --log-type Tail`）。
+- **計測結果（nodejs22.x、arm64、1,024MB、各 10 回）**: Init Duration の中央値は Strands 版 591ms（381〜720）、minamo 版 357ms（247〜439）。手元の Node.js 24 での `import` 時間は 187ms 対 111ms。バンドルは minify なしで 4,132KB 対 2,305KB、minify 後 1,910KB 対 996KB。**minify は import 時間をほとんど変えませんでした**（181ms 対 187ms）。時間はファイルの読み込みより、モジュール最上位のコードの実行にかかっています。
+- **Strands 版のバンドルの差分の主因は zod（733KB）、@strands-agents/sdk（546KB）、ajv（207KB）、MCP SDK（177KB）です。** minamo 版の残りはほぼ AWS SDK で、minamo のコアとアダプターは minify 後で合わせて約 3KB です。esbuild の `metafile` で内訳を出せます。
+- **step の記録の大きさは、`get-durable-execution-history --include-execution-data` の `StepSucceededDetails.Result.Payload` で確認できます。** minamo 版の普通のツールは、同じ結果が `run` の step とツールのスコープの両方に記録されます。
+- **ヘッドレス Chromium で Cognito のクラシック Hosted UI にログインするとき、表示中のフォームへの入力が反映されませんでした**（フォントがなく文字も描画されない環境）。表示中のフォームの input に値を代入し、`HTMLFormElement.prototype.submit.call(form)` で送信すると通りました。React の textarea に日本語を入れるときは、`fill` だと 1 文字目しか入らず、`page.keyboard.sendCharacter` で入りました。
+- **mermaid の構文検査は、ブラウザで `mermaid.parse` を使います。** ヘッドレス環境では sequence 図の `render` が「svg element not in render tree」で失敗しますが、構文の問題ではありません。
