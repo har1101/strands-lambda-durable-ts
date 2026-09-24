@@ -49,3 +49,14 @@
 - **一時的なエラーを判定する正規表現に、`\b5\d\d\b` や `\b429\b` のような数字を入れてはいけません。** 「520 tokens」のような検証エラーの文言に一致して、リトライしてしまいます。`throttl`、`service.?unavailable`、`internal.?server` のような語で判定します。
 - **README のコード例は、`test/` に同じコードの `.ts` を置いて `npm run typecheck` で検査します。** 利用者のコードは `declare` で宣言します。ファイル名を `*.test.ts` にしなければ、テストとしては実行されません。
 - **`gh repo create <owner>/<name> --public --source . --push` を使えば、ローカルのリポジトリから作成と push が 1 回で済みます。** その後、`gh run watch <id> --exit-status` で CI の完了を待てます。
+
+## minamo の例を AWS にデプロイ
+
+- **SAM のテンプレートは、SAM CLI がなくてもデプロイできます。** `Transform: AWS::Serverless-2016-10-31` は CloudFormation 側で処理されるので、`aws cloudformation package` と `aws cloudformation deploy --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND` で足ります。`AutoPublishAlias` と `DurableConfig` も、この方法で動きました。
+- **esbuild の `alias` にパッケージのディレクトリを指定すると、`main`（CommonJS 版）に解決されます。** `@aws/durable-execution-sdk-js` の CommonJS 版を ESM の bundle に入れると、Lambda の init が `__filename is not defined in ES module scope` で失敗します。`dist/index.mjs` を直接指定します。デプロイの前に、`node -e "import('./dist/index.mjs')"` で読み込めるか確認すると、この失敗を先に見つけられます。
+- **init でエラーになると、durable execution は `RUNNING` のまま再試行を続けます。** 呼び出しの失敗が履歴の `InvocationCompleted` に積み上がります。`aws lambda stop-durable-execution` で止めます。
+- **`file:../..` の依存はシンボリックリンクになります。** esbuild はリンク先から依存を解決するので、SDK が 2 つ bundle されます。`preserveSymlinks` を使うと、リンク先の `node_modules` を見てしまいます。`alias` で 1 つにそろえます。
+- **`list-durable-executions-by-function` の `--qualifier` にエイリアスは使えません。** "Cannot filter by alias" になるので、関数名だけで一覧を取得します。実行の ARN には、エイリアスではなくバージョン番号が入ります（`...:minamo-example-agent:2/durable-execution/...`）。
+- **実行の履歴（`get-durable-execution-history`）から、コールバック ID が分かります。** `CallbackStarted` のイベントの `CallbackStartedDetails.CallbackId` です。`waitForCallback` の内部のオペレーションには名前がないので、`SubType`（`Callback`、`Step`）で識別します。
+- **ツールのリトライ待ちの後、次の試行は別の呼び出しで動くようです。** 承認待ちを含む実行で、呼び出しが 3 回になりました。1 回目の実行、リトライ待ちの後、承認後の再開と推測しています（ログでの裏付けはしていません）。
+- **npm の Trusted Publishing は、既にあるパッケージの設定画面で登録します。** そのため、最初の公開は手動（`npm login` と `npm publish`）で行います。2026-09 以降に登録した設定は、既定で `npm stage publish`（staged publishing）だけを許可します。`npm publish` も許可するかは、登録時に選びます。npm CLI 11.5.1 以上と Node 22.14 以上が必要です。
