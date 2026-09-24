@@ -31,3 +31,12 @@
 - **`gh repo rename` を使うと、旧 URL は GitHub が自動でリダイレクトします。** そのため、上流の Issue やコメントに書いたリンクは切れません。それでも見た目をそろえるため、自分の投稿のリンクは新しい URL に直しました。
 - **直前に作って誰も使っていないリリースは、作り直せます。** `gh release delete --cleanup-tag` でリリースとタグを消し、同じタグを付け直せば、Release ワークフローがもう一度実行されます。すでに誰かが使っているバージョンのタグは、付け替えないでください。
 - **旧名の import が残っていても、型チェックで検出できます。** 名前を変えたら、`npm install` の後に `npm run typecheck` を実行します。
+
+## 軽量コアの設計スパイク
+
+- **エンジンによって、オペレーションの同一性の決まり方が違います。** Cloudflare Workflows の `step.do` は、名前をキャッシュのキーにします（公式ドキュメントの「Name steps deterministically」）。`Promise.all` で並列に実行できますが、`Promise.race` は step で囲む必要があります。Lambda は呼び出し順で決まります。両方に対応するには、名前を一意かつ決定的にしたうえで、開始順も固定します。
+- **コーデックは、プリミティブの中ではなく、エンジンの境界に置きます。** モデルとツールの関数の中だけで `$bytes` の encode をしていたところ、子コンテキスト（scope）の戻り値として JSON 化されるときに、`Uint8Array` が `{"0":1,...}` に壊れました。Lambda では step と `runInChildContext` の両方に同じ `serdes` を渡します。
+- **Lambda の SDK の `Serdes<T>` と `step<T>` の型は、ジェネリックのまま受け渡します。** `Serdes<unknown>` を渡すと、戻り値が `Promise<unknown>` になり、型エラーになります。アダプターのメソッドを `step<T>(...)` と書き、`serdes<T>()` を作って渡します。SDK の `Duration` は、少なくとも 1 つのキーが必須の union です。`{ seconds }` に変換して渡すと簡単です。
+- **`LocalDurableTestRunner.teardownTestEnvironment()` は、`setupTestEnvironment()` を呼んでいないと例外を投げます。** Lambda 以外のテストと同じファイルにあると、共通の `afterEach` で失敗します。Lambda のテストの中で `t.after()` を使います。
+- **Web 標準の API だけで書けば、Bun でもそのまま動きます。** `btoa`/`atob`、`crypto.randomUUID`、`Promise.withResolvers` を使い、`Buffer`、`node:crypto`、`AsyncLocalStorage` は使いません。コンテキストは引数で渡します。
+- **npm の短いローマ字の名前は、ほとんど使われています。** `npm view <name>` が E404 を返せば空きです。npmjs.com の org ページは 403 になるため、スコープが空いているかはこの方法では確認できません。
