@@ -85,3 +85,4 @@
 - **step の記録の大きさは、`get-durable-execution-history --include-execution-data` の `StepSucceededDetails.Result.Payload` で確認できます。** minamo 版の普通のツールは、同じ結果が `run` の step とツールのスコープの両方に記録されます。
 - **ヘッドレス Chromium で Cognito のクラシック Hosted UI にログインするとき、表示中のフォームへの入力が反映されませんでした**（フォントがなく文字も描画されない環境）。表示中のフォームの input に値を代入し、`HTMLFormElement.prototype.submit.call(form)` で送信すると通りました。React の textarea に日本語を入れるときは、`fill` だと 1 文字目しか入らず、`page.keyboard.sendCharacter` で入りました。
 - **mermaid の構文検査は、ブラウザで `mermaid.parse` を使います。** ヘッドレス環境では sequence 図の `render` が「svg element not in render tree」で失敗しますが、構文の問題ではありません。
+- **SDK の `createRetryStrategy` は `{ ...DEFAULT_CONFIG, ...config }` で既定値と合わせるので、値が `undefined` のプロパティも既定値を上書きします。** `backoffRate: undefined` だと 1 回目の待ちは 5 秒（`undefined ** 0 === 1`）、2 回目以降は NaN 秒になりました。オプションを渡すときは `undefined` のキーを落とします（minamo#5）。
